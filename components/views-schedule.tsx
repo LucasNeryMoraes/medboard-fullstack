@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import type { ExtraStudy } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { allLessons, areas, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO, weekRange } from "@/utils/schedule";
+import { allLessons, allProgressIds, areas, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO, weekRange } from "@/utils/schedule";
 
 type TaskRecord = { externalId: string | null; status: "PENDING" | "DONE" | "ARCHIVED" };
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
@@ -33,6 +33,9 @@ export function ScheduleView() {
   const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
   const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "" });
   const selectedWeek = store.week || schedule.rows.find((row) => row.data === todayISO())?.semana || schedule.semanas[0];
+  const totalProgressIds = useMemo(() => allProgressIds(), []);
+  const progressPct = totalProgressIds.length ? Math.round((store.doneIds.length / totalProgressIds.length) * 100) : 0;
+  const daysRemaining = Math.max(0, Math.ceil((parseISODate(schedule.stats.fim).getTime() - parseISODate(todayISO()).getTime()) / 86_400_000));
 
   useEffect(() => {
     let ignore = false;
@@ -149,7 +152,24 @@ export function ScheduleView() {
 
   return (
     <div className="grid gap-6">
-      <section className="card grid gap-3 p-4 lg:grid-cols-[1.3fr_.7fr_.7fr_.7fr]">
+      <section className="grid gap-3 md:grid-cols-3">
+        <article className="card p-4">
+          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Dias restantes</span>
+          <strong className="mt-1 block text-2xl font-black tracking-tight">{daysRemaining}</strong>
+          <small className="font-bold text-slate-500 dark:text-slate-400">dias ate o fim do cronograma</small>
+        </article>
+        <article className="card p-4">
+          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Aulas atrasadas</span>
+          <strong className="mt-1 block text-2xl font-black tracking-tight">{pendingOverdue.length}</strong>
+        </article>
+        <article className="card p-4">
+          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Progresso total do cronograma</span>
+          <strong className="mt-1 block text-2xl font-black tracking-tight">{progressPct}%</strong>
+          <small className="font-bold text-slate-500 dark:text-slate-400">{store.doneIds.length} de {totalProgressIds.length} concluidos</small>
+        </article>
+      </section>
+
+      <section className="card grid gap-3 p-3 lg:grid-cols-[1.3fr_.7fr_.7fr_.7fr]">
         <label className="relative">
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
           <input className="input pl-10" placeholder="Buscar aula, tema ou disciplina" value={store.search} onChange={(event) => store.setFilter("search", event.target.value)} />
