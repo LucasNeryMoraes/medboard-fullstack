@@ -5,6 +5,8 @@ import { persist } from "zustand/middleware";
 import type { TabKey } from "@/types/schedule";
 
 type Board = Record<string, Record<string, string>>;
+export type LessonQuestionState = Record<string, { done: boolean; feitas: number; acertos: number; erros: number; observacoes: string }>;
+export type ExtraStudy = { id: string; titulo: string; materia: string; data: string; horas: number };
 
 type MedboardState = {
   tab: TabKey;
@@ -14,11 +16,18 @@ type MedboardState = {
   type: string;
   doneIds: string[];
   board: Board;
+  lessonQuestions: LessonQuestionState;
+  extraStudies: ExtraStudy[];
   onboardingDone: boolean;
   setTab: (tab: TabKey) => void;
   setFilter: (key: "search" | "week" | "discipline" | "type", value: string) => void;
   toggleDone: (id: string) => void;
+  setDoneIds: (ids: string[]) => void;
   resetProgress: () => void;
+  setLessonQuestion: (lessonId: string, value: Partial<LessonQuestionState[string]>) => void;
+  setLessonQuestions: (items: LessonQuestionState) => void;
+  addExtraStudy: (study: ExtraStudy) => void;
+  setExtraStudies: (studies: ExtraStudy[]) => void;
   setBoardField: (week: string, field: string, value: string) => void;
   fillBoardTemplate: (week: string) => void;
   finishOnboarding: () => void;
@@ -26,6 +35,7 @@ type MedboardState = {
 
 const days = ["segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"];
 const shifts = ["manha", "tarde", "noite"];
+const emptyLessonQuestion = () => ({ done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" });
 
 export const useMedboardStore = create<MedboardState>()(
   persist(
@@ -37,6 +47,8 @@ export const useMedboardStore = create<MedboardState>()(
       type: "",
       doneIds: [],
       board: {},
+      lessonQuestions: {},
+      extraStudies: [],
       onboardingDone: false,
       setTab: (tab) => set({ tab }),
       setFilter: (key, value) => set({ [key]: value }),
@@ -44,7 +56,18 @@ export const useMedboardStore = create<MedboardState>()(
         set((state) => ({
           doneIds: state.doneIds.includes(id) ? state.doneIds.filter((item) => item !== id) : [...state.doneIds, id]
         })),
+      setDoneIds: (ids) => set({ doneIds: [...new Set(ids)] }),
       resetProgress: () => set({ doneIds: [] }),
+      setLessonQuestion: (lessonId, value) =>
+        set((state) => ({
+          lessonQuestions: {
+            ...state.lessonQuestions,
+            [lessonId]: Object.assign(emptyLessonQuestion(), state.lessonQuestions[lessonId] || {}, value)
+          }
+        })),
+      setLessonQuestions: (items) => set({ lessonQuestions: items }),
+      addExtraStudy: (study) => set((state) => ({ extraStudies: [study, ...state.extraStudies] })),
+      setExtraStudies: (studies) => set({ extraStudies: studies }),
       setBoardField: (week, field, value) =>
         set((state) => ({ board: { ...state.board, [week]: { ...(state.board[week] || {}), [field]: value } } })),
       fillBoardTemplate: (week) =>

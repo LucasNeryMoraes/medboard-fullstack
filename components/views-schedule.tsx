@@ -1,26 +1,73 @@
 "use client";
 
-import { useMemo } from "react";
-import { Check, RotateCcw, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Circle, RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
+import type { ExtraStudy } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO, weekRange } from "@/utils/schedule";
+import { allLessons, areas, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO, weekRange } from "@/utils/schedule";
+
+type TaskRecord = { externalId: string | null; status: "PENDING" | "DONE" | "ARCHIVED" };
+type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
+type ProductivityRecord = { id: string; materia: string | null; horas: number; data: string; observacoes: string | null };
 
 const dayLabels = [
   ["segunda", "Segunda"],
-  ["terca", "Terça"],
+  ["terca", "Terca"],
   ["quarta", "Quarta"],
   ["quinta", "Quinta"],
   ["sexta", "Sexta"],
-  ["sabado", "Sábado"],
+  ["sabado", "Sabado"],
   ["domingo", "Domingo"]
 ];
-const shifts = [["manha", "Manhã"], ["tarde", "Tarde"], ["noite", "Noite"]];
+const shifts = [["manha", "Manha"], ["tarde", "Tarde"], ["noite", "Noite"]];
+
+function toDateInput(value: string | Date) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? todayISO() : date.toLocaleDateString("sv-SE");
+}
 
 export function ScheduleView() {
   const store = useMedboardStore();
+  const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
+  const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "" });
   const selectedWeek = store.week || schedule.rows.find((row) => row.data === todayISO())?.semana || schedule.semanas[0];
+
+  useEffect(() => {
+    let ignore = false;
+    async function hydrate() {
+      try {
+        const [tasks, questions, productivity] = await Promise.all([
+          api<TaskRecord[]>("/api/tasks"),
+          api<LessonQuestionRecord[]>("/api/lesson-questions"),
+          api<ProductivityRecord[]>("/api/productivity")
+        ]);
+        if (ignore) return;
+        store.setDoneIds(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
+        store.setLessonQuestions(Object.fromEntries(questions.map((item) => [item.lessonId, {
+          done: item.done,
+          feitas: item.feitas,
+          acertos: item.acertos,
+          erros: item.erros,
+          observacoes: item.observacoes || ""
+        }])));
+        store.setExtraStudies(productivity
+          .filter((item) => item.observacoes?.startsWith("extra-study:"))
+          .map((item) => ({
+            id: item.id,
+            titulo: item.observacoes?.replace("extra-study:", "") || "Estudo externo",
+            materia: item.materia || "Sem area",
+            data: toDateInput(item.data),
+            horas: item.horas
+          })));
+      } catch {
+        // Modo demo ou sessao expirada: mantem a experiencia local.
+      }
+    }
+    hydrate();
+    return () => { ignore = true; };
+  }, []);
 
   const visibleRows = useMemo(() => {
     const q = normalizeText(store.search);
@@ -39,13 +86,64 @@ export function ScheduleView() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [visibleRows]);
 
-  async function toggle(id: string, payload?: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE"; materia?: string }) {
+  const overdueLessons = useMemo(() => {
+    const today = parseISODate(todayISO());
+    return allLessons()
+      .filter((lesson) => parseISODate(lesson.data) < today)
+      .filter((lesson) => overdueMode === "all" || !store.doneIds.includes(lesson.id))
+      .sort((a, b) => a.data.localeCompare(b.data));
+  }, [overdueMode, store.doneIds]);
+
+  const pendingOverdue = useMemo(() => {
+    const today = parseISODate(todayISO());
+    return allLessons().filter((lesson) => parseISODate(lesson.data) < today && !store.doneIds.includes(lesson.id));
+  }, [store.doneIds]);
+
+  async function syncTask(id: string, checked: boolean, payload: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE"; materia?: string }) {
     store.toggleDone(id);
-    if (payload && !store.doneIds.includes(id)) {
-      api("/api/tasks", {
+    try {
+      await api("/api/tasks", {
         method: "POST",
-        body: JSON.stringify({ externalId: id, titulo: payload.titulo, data: payload.data, tipo: payload.tipo, materia: payload.materia, status: "DONE" })
-      }).catch(() => toast.warning("Salvo localmente. Configure o banco para sincronizar."));
+        body: JSON.stringify({ externalId: id, titulo: payload.titulo, data: payload.data, tipo: payload.tipo, materia: payload.materia, status: checked ? "DONE" : "PENDING" })
+      });
+    } catch {
+      toast.warning("Alteracao salva localmente; faca login para sincronizar.");
+    }
+  }
+
+  async function syncQuestion(lessonId: string, value: Partial<{ done: boolean; feitas: number; acertos: number; erros: number; observacoes: string }>) {
+    const current = store.lessonQuestions[lessonId] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
+    const next = { ...current, ...value };
+    store.setLessonQuestion(lessonId, next);
+    try {
+      await api(`/api/lesson-questions/${lessonId}`, { method: "PATCH", body: JSON.stringify(next) });
+    } catch {
+      toast.warning("Questoes salvas localmente; faca login para sincronizar.");
+    }
+  }
+
+  async function addExtraStudy() {
+    if (!extraForm.titulo.trim() || !extraForm.materia || !extraForm.data || !extraForm.horas) {
+      toast.error("Preencha tema, area, data e horas.");
+      return;
+    }
+    const study: ExtraStudy = {
+      id: crypto.randomUUID(),
+      titulo: extraForm.titulo.trim(),
+      materia: extraForm.materia,
+      data: extraForm.data,
+      horas: Number(extraForm.horas)
+    };
+    store.addExtraStudy(study);
+    setExtraForm({ titulo: "", materia: "", data: todayISO(), horas: "" });
+    try {
+      await api("/api/productivity", {
+        method: "POST",
+        body: JSON.stringify({ materia: study.materia, data: study.data, horas: study.horas, rendimento: 100, observacoes: `extra-study:${study.titulo}` })
+      });
+      toast.success("Estudo externo salvo");
+    } catch {
+      toast.warning("Estudo salvo localmente; faca login para sincronizar.");
     }
   }
 
@@ -54,23 +152,76 @@ export function ScheduleView() {
       <section className="card grid gap-3 p-4 lg:grid-cols-[1.3fr_.7fr_.7fr_.7fr]">
         <label className="relative">
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
-          <input className="input pl-10" placeholder="Buscar aula, tema ou disciplina" value={store.search} onChange={(e) => store.setFilter("search", e.target.value)} />
+          <input className="input pl-10" placeholder="Buscar aula, tema ou disciplina" value={store.search} onChange={(event) => store.setFilter("search", event.target.value)} />
         </label>
-        <select className="input" value={store.week} onChange={(e) => store.setFilter("week", e.target.value)}>
+        <select className="input" value={store.week} onChange={(event) => store.setFilter("week", event.target.value)}>
           <option value="">Todas as semanas</option>
           {schedule.semanas.map((week) => <option key={week}>{week}</option>)}
         </select>
-        <select className="input" value={store.discipline} onChange={(e) => store.setFilter("discipline", e.target.value)}>
+        <select className="input" value={store.discipline} onChange={(event) => store.setFilter("discipline", event.target.value)}>
           <option value="">Todas as disciplinas</option>
           {schedule.disciplinas.map((discipline) => <option key={discipline}>{discipline}</option>)}
         </select>
-        <select className="input" value={store.type} onChange={(e) => store.setFilter("type", e.target.value)}>
+        <select className="input" value={store.type} onChange={(event) => store.setFilter("type", event.target.value)}>
           <option value="">Todos os tipos</option>
           <option value="aula">Aulas</option>
-          <option value="revisao">Revisões</option>
+          <option value="revisao">Revisoes</option>
           <option value="simulado">Simulados</option>
           <option value="livre">Livres</option>
         </select>
+      </section>
+
+      <section className="card p-4">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-violet-100 pb-4 dark:border-violet-400/20">
+          <div>
+            <h2 className="flex items-center gap-2 text-xl font-black tracking-tight"><span className="h-2.5 w-2.5 rounded-full bg-fuchsia-500" />Aulas atrasadas</h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Lista automatica com todas as aulas do cronograma que ficaram pendentes ate hoje.</p>
+          </div>
+          <div className="min-w-20 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-center text-fuchsia-700 dark:border-fuchsia-400/30 dark:bg-fuchsia-500/10 dark:text-fuchsia-200">
+            <strong className="block text-2xl">{pendingOverdue.length}</strong>
+            <span className="text-xs font-bold">pendente(s)</span>
+          </div>
+        </div>
+        <div className="mt-4 flex gap-2">
+          <button className={`rounded-full px-4 py-2 text-sm font-bold ${overdueMode === "pending" ? "bg-fuchsia-600 text-white" : "border border-violet-100 text-violet-900 dark:border-white/10 dark:text-violet-100"}`} onClick={() => setOverdueMode("pending")}>Pendentes</button>
+          <button className={`rounded-full px-4 py-2 text-sm font-bold ${overdueMode === "all" ? "bg-fuchsia-600 text-white" : "border border-violet-100 text-violet-900 dark:border-white/10 dark:text-violet-100"}`} onClick={() => setOverdueMode("all")}>Todas</button>
+        </div>
+        <div className="mt-4 grid gap-3">
+          {overdueLessons.map((lesson) => (
+            <article key={lesson.id} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div className="font-black text-fuchsia-600">{lesson.dataBR} - {lesson.disciplina}</div>
+                <div className="text-sm text-slate-600 dark:text-slate-300 md:text-right">{lesson.aula}<br />{lesson.semana} - {lesson.horario}</div>
+              </div>
+              <button className="mt-4 w-full rounded-xl bg-violet-950 px-4 py-2.5 text-sm font-black text-white" onClick={() => syncTask(lesson.id, true, { titulo: lesson.aula, data: lesson.data, tipo: "AULA", materia: lesson.disciplina })}>Marcar como assistida</button>
+            </article>
+          ))}
+          {!overdueLessons.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma aula atrasada encontrada.</div>}
+        </div>
+      </section>
+
+      <section className="card p-4">
+        <h2 className="text-lg font-black">Estudos fora do cronograma</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Adicione aulas e assuntos estudados externamente.</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <input className="input" placeholder="Tema / aula estudada" value={extraForm.titulo} onChange={(event) => setExtraForm((current) => ({ ...current, titulo: event.target.value }))} />
+          <select className="input" value={extraForm.materia} onChange={(event) => setExtraForm((current) => ({ ...current, materia: event.target.value }))}>
+            <option value="">Area</option>
+            {areas.map((area) => <option key={area}>{area}</option>)}
+          </select>
+          <input className="input" type="date" value={extraForm.data} onChange={(event) => setExtraForm((current) => ({ ...current, data: event.target.value }))} />
+          <input className="input" type="number" min="0" step="0.25" placeholder="Horas estudadas" value={extraForm.horas} onChange={(event) => setExtraForm((current) => ({ ...current, horas: event.target.value }))} />
+        </div>
+        <button className="btn-primary mt-4 w-full bg-red-700 hover:bg-red-800" onClick={addExtraStudy}>Adicionar estudo</button>
+        <div className="mt-5 grid gap-2">
+          {store.extraStudies.map((study) => (
+            <div key={study.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
+              <strong>{study.titulo}</strong>
+              <span className="text-slate-500">{study.materia} - {study.data} - {study.horas}h</span>
+            </div>
+          ))}
+          {!store.extraStudies.length && <p className="py-4 text-center text-sm text-slate-400">Nenhum estudo externo adicionando.</p>}
+        </div>
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[280px_1fr]">
@@ -90,8 +241,8 @@ export function ScheduleView() {
           <article className="card overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4 dark:border-white/10">
               <div>
-                <h2 className="text-lg font-black">Lousa semanal · {selectedWeek}</h2>
-                <p className="text-sm text-slate-500">Autosave local, preparada para sincronização por API.</p>
+                <h2 className="text-lg font-black">Lousa semanal - {selectedWeek}</h2>
+                <p className="text-sm text-slate-500">Autosave local com estrutura pronta para sincronizacao.</p>
               </div>
               <button className="btn-secondary" onClick={() => store.fillBoardTemplate(selectedWeek)}><RotateCcw size={16} /> Modelo</button>
             </div>
@@ -105,7 +256,7 @@ export function ScheduleView() {
                       return (
                         <label key={field} className="grid gap-1">
                           <span className="text-xs font-bold text-slate-400">{dayLabel}</span>
-                          <textarea className="input min-h-24 resize-y text-xs" value={store.board[selectedWeek]?.[field] || ""} onChange={(e) => store.setBoardField(selectedWeek, field, e.target.value)} />
+                          <textarea className="input min-h-24 resize-y text-xs" value={store.board[selectedWeek]?.[field] || ""} onChange={(event) => store.setBoardField(selectedWeek, field, event.target.value)} />
                         </label>
                       );
                     })}
@@ -118,41 +269,71 @@ export function ScheduleView() {
           {grouped.map(([date, rows]) => {
             const first = rows[0];
             const isToday = date === todayISO();
+            const lessonCount = rows.reduce((acc, row) => acc + row.aulas.length, 0);
             return (
-              <article key={date} className={`card overflow-hidden ${isToday ? "ring-2 ring-brand-500" : ""}`}>
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-slate-900">
+              <article key={date} className="card overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-violet-100 p-4 dark:border-white/10">
                   <div>
-                    <h3 className="text-lg font-black">{first.diaSemana} · {first.dataBR}</h3>
+                    <h3 className="text-lg font-black">{first.diaSemana} - {first.dataBR}</h3>
                     <p className="text-sm text-slate-500">{first.semana}</p>
                   </div>
-                  {isToday && <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-700/20 dark:text-rose-200">Hoje</span>}
+                  <div className="flex gap-2">
+                    {isToday && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">Hoje</span>}
+                    {!!lessonCount && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">{lessonCount} aula(s)</span>}
+                  </div>
                 </div>
                 <div className="grid gap-3 p-4">
                   {rows.flatMap((row) => [
                     ...row.aulas.map((lesson) => {
                       const priority = inferPriority(lesson);
                       const done = store.doneIds.includes(lesson.id);
+                      const q = store.lessonQuestions[lesson.id] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
                       return (
-                        <button key={lesson.id} className={`grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-2xl border p-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800 ${done ? "opacity-60" : ""}`} onClick={() => toggle(lesson.id, { titulo: lesson.aula, data: lesson.data, tipo: "AULA", materia: lesson.disciplina })}>
-                          <span className={`mt-1 grid h-6 w-6 place-items-center rounded-full border ${done ? "bg-emerald-500 text-white" : "border-slate-300"}`}>{done && <Check size={15} />}</span>
-                          <span><strong className="block">{lesson.disciplina}</strong><span className="text-sm text-slate-500">{lesson.aula}</span></span>
-                          <span className={`badge ${priority.value === "HIGH" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-700"}`}>{priority.label}</span>
-                        </button>
+                        <div key={lesson.id} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
+                          <div className="grid gap-3 md:grid-cols-[auto_1fr_auto]">
+                            <button className="mt-1" aria-label={done ? "Desmarcar aula" : "Marcar aula"} onClick={() => syncTask(lesson.id, !done, { titulo: lesson.aula, data: lesson.data, tipo: "AULA", materia: lesson.disciplina })}>
+                              {done ? <Check className="text-emerald-500" size={20} /> : <Circle className="text-slate-400" size={20} />}
+                            </button>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <strong>{lesson.disciplina}</strong>
+                                <span className="badge bg-slate-100 text-slate-800 dark:bg-white/10 dark:text-white">{priority.value === "HIGH" ? "Alta incidencia" : priority.value === "MEDIUM" ? "Incidencia moderada" : "Baixa incidencia"}</span>
+                              </div>
+                              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{lesson.aula}</p>
+                            </div>
+                            <div className="text-sm md:text-right">
+                              <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">Aula</span>
+                              <p className="mt-2 text-slate-500">{lesson.horario}</p>
+                            </div>
+                          </div>
+                          <div className="mt-3 rounded-2xl border border-violet-200 bg-violet-50/70 p-4 dark:border-violet-400/20 dark:bg-violet-500/10">
+                            <label className="flex items-center gap-2 text-sm font-black text-violet-950 dark:text-violet-100">
+                              <input type="checkbox" checked={q.done} onChange={(event) => syncQuestion(lesson.id, { done: event.target.checked })} />
+                              Questoes desta aula concluidas
+                            </label>
+                            <div className="mt-4 grid gap-2 md:grid-cols-3">
+                              <input className="input" type="number" min="0" placeholder="Questoes feitas" value={q.feitas || ""} onChange={(event) => syncQuestion(lesson.id, { feitas: Number(event.target.value || 0) })} />
+                              <input className="input" type="number" min="0" placeholder="Acertos" value={q.acertos || ""} onChange={(event) => syncQuestion(lesson.id, { acertos: Number(event.target.value || 0) })} />
+                              <input className="input" type="number" min="0" placeholder="Erros" value={q.erros || ""} onChange={(event) => syncQuestion(lesson.id, { erros: Number(event.target.value || 0) })} />
+                            </div>
+                            <textarea className="input mt-2 min-h-12" placeholder="Especificacoes: banca, QBank, principais erros, temas dificeis..." value={q.observacoes} onChange={(event) => syncQuestion(lesson.id, { observacoes: event.target.value })} />
+                          </div>
+                        </div>
                       );
                     }),
                     ...row.revisoesDoDia.map((review) => (
-                      <button key={review.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-2xl border border-rose-100 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10" onClick={() => toggle(review.id, { titulo: review.aula, data: row.data, tipo: "REVISAO", materia: review.disciplina })}>
+                      <button key={review.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-2xl border border-rose-100 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10" onClick={() => syncTask(review.id, !store.doneIds.includes(review.id), { titulo: review.aula, data: row.data, tipo: "REVISAO", materia: review.disciplina })}>
                         <span className="mt-1 grid h-6 w-6 place-items-center rounded-full border border-rose-300">{store.doneIds.includes(review.id) && <Check size={15} />}</span>
-                        <span><strong className="block">{review.tipoRevisao} · {review.disciplina}</strong><span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span></span>
-                        <span className="badge bg-white text-brand-700 dark:bg-slate-900">Revisão</span>
+                        <span><strong className="block">{review.tipoRevisao} - {review.disciplina}</strong><span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span></span>
+                        <span className="badge bg-white text-brand-700 dark:bg-slate-900">Revisao</span>
                       </button>
                     )),
                     isSaturday(row.data) ? (
-                      <button key={saturdaySimuladoId(row.data)} className="rounded-2xl border border-brand-100 bg-brand-50 p-4 text-left dark:border-brand-700/30 dark:bg-brand-700/10" onClick={() => toggle(saturdaySimuladoId(row.data), { titulo: "Simulado semanal", data: row.data, tipo: "SIMULADO", materia: "Simulado" })}>
-                        <strong>Simulado semanal</strong><p className="text-sm text-slate-600 dark:text-slate-300">Realizar prova e correção do fim de semana.</p>
+                      <button key={saturdaySimuladoId(row.data)} className="rounded-2xl border border-brand-100 bg-brand-50 p-4 text-left dark:border-brand-700/30 dark:bg-brand-700/10" onClick={() => syncTask(saturdaySimuladoId(row.data), !store.doneIds.includes(saturdaySimuladoId(row.data)), { titulo: "Simulado semanal", data: row.data, tipo: "SIMULADO", materia: "Simulado" })}>
+                        <strong>Simulado semanal</strong><p className="text-sm text-slate-600 dark:text-slate-300">Realizar prova e correcao do fim de semana.</p>
                       </button>
                     ) : null,
-                    row.domingo ? <div key={`livre-${row.row}`} className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500 dark:border-white/10">Domingo livre · descanso, lazer e organização leve.</div> : null
+                    row.domingo ? <div key={`livre-${row.row}`} className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500 dark:border-white/10">Domingo livre - descanso, lazer e organizacao leve.</div> : null
                   ])}
                 </div>
               </article>

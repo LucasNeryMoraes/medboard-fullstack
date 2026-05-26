@@ -51,6 +51,15 @@ export const productivitySchema = z.object({
   data: z.coerce.date().optional()
 });
 
+export const lessonQuestionSchema = z.object({
+  lessonId: z.string().min(1),
+  done: z.boolean().default(false),
+  feitas: z.coerce.number().int().min(0).default(0),
+  acertos: z.coerce.number().int().min(0).default(0),
+  erros: z.coerce.number().int().min(0).default(0),
+  observacoes: z.string().optional().nullable()
+});
+
 export const scheduleWeekSchema = z.object({
   semana: z.string().min(1),
   tarefas: z.unknown().default([]),
