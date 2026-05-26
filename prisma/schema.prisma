@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  PENDING
+  DONE
+  ARCHIVED
+}
+
+enum TaskType {
+  AULA
+  REVISAO
+  SIMULADO
+  LIVRE
+  EXTRA
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model User {
+  id            String          @id @default(cuid())
+  nome          String
+  email         String          @unique
+  senha         String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  schedules     ScheduleWeek[]
+  tasks         Task[]
+  performances  Performance[]
+  errorNotes    ErrorNotebook[]
+  timers        StudyTimer[]
+  productivity  Productivity[]
+  flashcards    Flashcard[]
+}
+
+model ScheduleWeek {
+  id        String   @id @default(cuid())
+  userId    String
+  semana    String
+  tarefas   Json
+  revisoes  Json
+  simulados Json
+  board     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, semana])
+  @@index([userId])
+}
+
+model Task {
+  id        String     @id @default(cuid())
+  userId    String
+  externalId String?
+  titulo    String
+  descricao String?
+  status    TaskStatus @default(PENDING)
+  data      DateTime
+  tipo      TaskType
+  prioridade Priority  @default(MEDIUM)
+  materia   String?
+  metadata  Json?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, externalId])
+  @@index([userId, data])
+}
+
+model Performance {
+  id         String   @id @default(cuid())
+  userId     String
+  materia    String
+  acertos    Int
+  erros      Int
+  percentual Float
+  examName   String?
+  data       DateTime @default(now())
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, materia])
+}
+
+model ErrorNotebook {
+  id        String   @id @default(cuid())
+  userId    String
+  tema      String
+  erro      String
+  revisao   String?
+  flashcard String?
+  resposta  String?
+  materia   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, tema])
+}
+
+model Flashcard {
+  id             String   @id @default(cuid())
+  userId         String
+  pergunta       String
+  resposta       String
+  materia        String?
+  deck           String?
+  dueDate        DateTime @default(now())
+  intervalDays   Int      @default(0)
+  repetitions    Int      @default(0)
+  lastDifficulty String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, dueDate])
+}
+
+model StudyTimer {
+  id        String   @id @default(cuid())
+  userId    String
+  tempo     Int
+  data      DateTime @default(now())
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, data])
+}
+
+model Productivity {
+  id          String   @id @default(cuid())
+  userId      String
+  horas       Float
+  rendimento  Int
+  observacoes String?
+  materia     String?
+  data        DateTime @default(now())
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, data])
+}
