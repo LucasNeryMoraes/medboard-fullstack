@@ -80,9 +80,9 @@ export function NotebookView() {
   const [deckFilter, setDeckFilter] = useState("Todos os baralhos");
   const [areaFilter, setAreaFilter] = useState("Todas as matérias");
   const [reviewFilter, setReviewFilter] = useState("Somente revisões de hoje/atrasadas");
-  const [quizArea, setQuizArea] = useState("Todas as áreas");
-  const [quizLimit, setQuizLimit] = useState("10");
-  const [quizItems, setQuizItems] = useState<Note[]>([]);
+  const [quizDeckFilter, setQuizDeckFilter] = useState("Todos os baralhos");
+  const [quizAreaFilter, setQuizAreaFilter] = useState("Todas as matérias");
+  const [quizReviewFilter, setQuizReviewFilter] = useState("Somente revisões de hoje/atrasadas");
   const [quizIndex, setQuizIndex] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
 
@@ -126,7 +126,19 @@ export function NotebookView() {
     const reviewOk = reviewFilter !== "Somente revisões de hoje/atrasadas" || compactDate(card.dueDate) <= today;
     return deckOk && areaOk && reviewOk;
   });
+  const quizItems = notes.filter((note) => {
+    const noteDeck = note.materia || "Sem matéria";
+    const deckOk = quizDeckFilter === "Todos os baralhos" || noteDeck === quizDeckFilter;
+    const areaOk = quizAreaFilter === "Todas as matérias" || note.materia === quizAreaFilter;
+    const reviewOk = quizReviewFilter !== "Somente revisões de hoje/atrasadas" || compactDate(note.data || note.createdAt) <= today;
+    return deckOk && areaOk && reviewOk;
+  });
   const currentQuiz = quizItems[quizIndex];
+
+  useEffect(() => {
+    setQuizIndex(0);
+    setShowAnswer(false);
+  }, [quizDeckFilter, quizAreaFilter, quizReviewFilter, notes.length]);
 
   async function createDeck() {
     const name = deckForm.name.trim();
@@ -210,25 +222,42 @@ export function NotebookView() {
     toast.success("Flashcard removido");
   }
 
-  function startQuiz(asFlashcards = false) {
-    const source = notes.filter((note) => quizArea === "Todas as áreas" || note.materia === quizArea);
-    const shuffled = [...source].sort(() => Math.random() - 0.5).slice(0, Math.max(1, Number(quizLimit || 10)));
-    setQuizItems(shuffled);
-    setQuizIndex(0);
-    setShowAnswer(asFlashcards);
-    if (!shuffled.length) toast.error("Cadastre questões no caderno primeiro.");
-  }
-
   function nextQuiz() {
     setShowAnswer(false);
     setQuizIndex((current) => Math.min(current + 1, Math.max(quizItems.length - 1, 0)));
   }
 
-  async function markReviewed() {
+  function previousQuiz() {
+    setShowAnswer(false);
+    setQuizIndex((current) => Math.max(current - 1, 0));
+  }
+
+  async function markReviewed(label = "Revisado", days = 1) {
     if (!currentQuiz) return;
-    await api(`/api/errors/${currentQuiz.id}`, { method: "PATCH", body: JSON.stringify({ data: new Date(), dificuldade: "Revisado" }) });
-    toast.success("Revisão marcada");
+    const nextDate = new Date();
+    nextDate.setDate(nextDate.getDate() + days);
+    const updated = await api<Note>(`/api/errors/${currentQuiz.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ data: nextDate, dificuldade: label })
+    });
+    setNotes((current) => current.map((note) => note.id === updated.id ? updated : note));
+    toast.success("Revisão atualizada");
     nextQuiz();
+  }
+
+  function editCurrentQuiz() {
+    if (!currentQuiz) return;
+    setNoteForm({
+      materia: currentQuiz.materia || areas[0],
+      tema: currentQuiz.tema,
+      erro: currentQuiz.erro,
+      resposta: currentQuiz.resposta || "",
+      revisao: currentQuiz.revisao || "",
+      imagem: currentQuiz.imagem || "",
+      data: compactDate(currentQuiz.data || currentQuiz.createdAt),
+      dificuldade: currentQuiz.dificuldade || "Dificuldade baixa"
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   return (
@@ -270,34 +299,54 @@ export function NotebookView() {
       <section className="card p-5">
         <h2 className="text-2xl font-black">Simulado do caderno de erros</h2>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Use suas próprias questões erradas para revisar. O site embaralha os itens do caderno de erros, mostra a questão, revela a resposta correta e permite marcar se você acertou ou errou na revisão.</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <select className="input max-w-48" value={quizArea} onChange={(event) => setQuizArea(event.target.value)}>
-            <option>Todas as áreas</option>
-            {areas.map((area) => <option key={area}>{area}</option>)}
-          </select>
-          <input className="input max-w-56" type="number" min="1" placeholder="Quantidade de questões" value={quizLimit} onChange={(event) => setQuizLimit(event.target.value)} />
-          <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={() => startQuiz(false)}>Iniciar simulado</button>
-          <button className="btn-secondary" onClick={() => startQuiz(true)}>Revisar como flashcards</button>
-        </div>
-        <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/50 p-5 dark:border-violet-400/20 dark:bg-violet-500/10">
+        <div className="mt-4 rounded-2xl border border-slate-200 p-4 dark:border-white/10">
+          <div className="grid gap-3 md:grid-cols-2">
+            <select className="input" value={quizDeckFilter} onChange={(event) => setQuizDeckFilter(event.target.value)}>
+              <option>Todos os baralhos</option>
+              {automaticDecks.map((deck) => <option key={deck.name}>{deck.name}</option>)}
+            </select>
+            <select className="input" value={quizAreaFilter} onChange={(event) => setQuizAreaFilter(event.target.value)}>
+              <option>Todas as matérias</option>
+              {areas.map((area) => <option key={area}>{area}</option>)}
+            </select>
+            <select className="input" value={quizReviewFilter} onChange={(event) => setQuizReviewFilter(event.target.value)}>
+              <option>Somente revisões de hoje/atrasadas</option>
+              <option>Todos os erros</option>
+            </select>
+          </div>
+
           {currentQuiz ? (
-            <div className="grid gap-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-bold text-slate-500">Questão {quizIndex + 1} de {quizItems.length}</span>
-                <span className="badge">{currentQuiz.materia}</span>
+            <div className="mt-4 grid gap-3">
+              <strong className="text-sm text-violet-950 dark:text-violet-100">
+                {quizIndex + 1} de {quizItems.length} • {currentQuiz.materia || "Sem matéria"} • {currentQuiz.materia || "automático"} • automático • {currentQuiz.tema || "Sem assunto"}
+              </strong>
+              <div className="rounded-2xl border border-violet-200 bg-violet-50/70 p-4 text-sm text-violet-950 dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-100">
+                <p><strong>Status:</strong> {compactDate(currentQuiz.data || currentQuiz.createdAt) <= today ? "para revisar hoje" : `próxima revisão em ${new Date(currentQuiz.data).toLocaleDateString("pt-BR")}`}</p>
+                <p className="mt-2">{currentQuiz.dificuldade === "Revisado" ? "Revisado anteriormente." : "Ainda não revisado."}</p>
               </div>
-              <h3 className="text-lg font-black">{currentQuiz.tema}</h3>
-              <p className="whitespace-pre-wrap text-sm">{currentQuiz.erro}</p>
-              {currentQuiz.imagem && <img className="max-h-64 rounded-xl border border-slate-200 object-contain dark:border-white/10" src={currentQuiz.imagem} alt="" />}
-              {showAnswer && <div className="rounded-xl bg-white p-4 text-sm shadow-sm dark:bg-slate-900"><strong>Resposta:</strong><p className="mt-2 whitespace-pre-wrap">{currentQuiz.resposta || currentQuiz.flashcard || "Sem resposta registrada."}</p></div>}
+              <div className="grid min-h-56 content-center rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-6 dark:border-fuchsia-400/30 dark:from-violet-500/10 dark:to-fuchsia-500/10">
+                <span className="text-xs font-black uppercase tracking-wider text-fuchsia-600">{showAnswer ? "Verso do flashcard" : "Frente do flashcard"}</span>
+                <p className="mt-4 whitespace-pre-wrap text-base font-black text-violet-950 dark:text-violet-50">{showAnswer ? (currentQuiz.resposta || currentQuiz.flashcard || "Sem resposta registrada.") : currentQuiz.erro}</p>
+                {currentQuiz.imagem && !showAnswer && <img className="mt-4 max-h-64 rounded-xl border border-slate-200 object-contain dark:border-white/10" src={currentQuiz.imagem} alt="" />}
+              </div>
+              {showAnswer && (
+                <div className="grid gap-2 md:grid-cols-4">
+                  <button className="btn-secondary min-h-16" onClick={() => markReviewed("Muito difícil", 1)}>Muito difícil<br /><span className="text-xs">rever amanhã</span></button>
+                  <button className="btn-secondary min-h-16" onClick={() => markReviewed("Difícil", 3)}>Difícil<br /><span className="text-xs">intervalo curto</span></button>
+                  <button className="btn-secondary min-h-16" onClick={() => markReviewed("Médio", 7)}>Médio<br /><span className="text-xs">intervalo médio</span></button>
+                  <button className="btn-primary min-h-16 bg-red-700 hover:bg-red-800" onClick={() => markReviewed("Fácil", 14)}>Fácil<br /><span className="text-xs">intervalo maior</span></button>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
-                <button className="btn-secondary" onClick={() => setShowAnswer((value) => !value)}>{showAnswer ? "Ocultar resposta" : "Revelar resposta"}</button>
-                <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={markReviewed}>Marcar revisada</button>
-                <button className="btn-secondary" onClick={nextQuiz}>Próxima</button>
+                <button className="btn-secondary" onClick={previousQuiz} disabled={quizIndex === 0}>Anterior</button>
+                <button className="btn-secondary" onClick={() => setShowAnswer((value) => !value)}>{showAnswer ? "Ver frente" : "Virar card"}</button>
+                <button className="btn-secondary" onClick={nextQuiz} disabled={quizIndex >= quizItems.length - 1}>Próximo</button>
+                <button className="btn-secondary" onClick={editCurrentQuiz}>Editar erro</button>
+                <button className="btn-secondary" onClick={() => removeNote(currentQuiz.id)}>Excluir erro</button>
               </div>
             </div>
           ) : (
-            <Empty text={'Nenhum simulado iniciado. Cadastre questões no caderno de erros e clique em "Iniciar simulado".'} />
+            <Empty text="Nenhum flashcard vencido ou previsto para hoje. Para estudar mesmo assim, selecione Todos os erros." />
           )}
         </div>
       </section>
