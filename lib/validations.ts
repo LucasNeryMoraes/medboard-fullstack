@@ -35,7 +35,20 @@ export const errorNotebookSchema = z.object({
   revisao: z.string().optional().nullable(),
   flashcard: z.string().optional().nullable(),
   resposta: z.string().optional().nullable(),
-  materia: z.string().optional().nullable()
+  materia: z.string().optional().nullable(),
+  imagem: z.string().optional().nullable(),
+  dificuldade: z.string().optional().nullable(),
+  data: z.coerce.date().optional()
+});
+
+export const flashcardSchema = z.object({
+  pergunta: z.string().min(1),
+  resposta: z.string().min(1),
+  materia: z.string().optional().nullable(),
+  deck: z.string().optional().nullable(),
+  tag: z.string().optional().nullable(),
+  imagem: z.string().optional().nullable(),
+  dueDate: z.coerce.date().optional()
 });
 
 export const timerSchema = z.object({

@@ -105,6 +105,9 @@ model ErrorNotebook {
   flashcard String?
   resposta  String?
   materia   String?
+  imagem    String?
+  dificuldade String?
+  data      DateTime @default(now())
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -119,6 +122,8 @@ model Flashcard {
   resposta       String
   materia        String?
   deck           String?
+  tag            String?
+  imagem         String?
   dueDate        DateTime @default(now())
   intervalDays   Int      @default(0)
   repetitions    Int      @default(0)

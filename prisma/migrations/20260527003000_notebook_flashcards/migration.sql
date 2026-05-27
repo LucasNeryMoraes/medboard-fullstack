@@ -1,0 +1,6 @@
+ALTER TABLE "ErrorNotebook" ADD COLUMN "imagem" TEXT;
+ALTER TABLE "ErrorNotebook" ADD COLUMN "dificuldade" TEXT;
+ALTER TABLE "ErrorNotebook" ADD COLUMN "data" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE "Flashcard" ADD COLUMN "tag" TEXT;
+ALTER TABLE "Flashcard" ADD COLUMN "imagem" TEXT;
