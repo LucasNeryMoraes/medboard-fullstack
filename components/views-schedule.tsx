@@ -8,7 +8,7 @@ import type { ExtraStudy } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
 import { allLessons, allProgressIds, areas, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO, weekRange } from "@/utils/schedule";
 
-type TaskRecord = { externalId: string | null; status: "PENDING" | "DONE" | "ARCHIVED" };
+type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type ProductivityRecord = { id: string; materia: string | null; horas: number; data: string; observacoes: string | null };
 
@@ -32,6 +32,7 @@ export function ScheduleView() {
   const store = useMedboardStore();
   const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
   const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "" });
+  const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const selectedWeek = store.week || schedule.rows.find((row) => row.data === todayISO())?.semana || schedule.semanas[0];
   const totalProgressIds = useMemo(() => allProgressIds(), []);
   const progressPct = totalProgressIds.length ? Math.round((store.doneIds.length / totalProgressIds.length) * 100) : 0;
@@ -47,6 +48,7 @@ export function ScheduleView() {
           api<ProductivityRecord[]>("/api/productivity")
         ]);
         if (ignore) return;
+        setTasks(tasks);
         store.setDoneIds(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
         store.setLessonQuestions(Object.fromEntries(questions.map((item) => [item.lessonId, {
           done: item.done,
@@ -89,6 +91,18 @@ export function ScheduleView() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [visibleRows]);
 
+  const generatedReviewsByDate = useMemo(() => {
+    const map = new Map<string, TaskRecord[]>();
+    tasks
+      .filter((task) => task.tipo === "REVISAO")
+      .filter((task) => task.externalId?.startsWith("review-"))
+      .forEach((task) => {
+        const date = toDateInput(task.data);
+        map.set(date, [...(map.get(date) || []), task]);
+      });
+    return map;
+  }, [tasks]);
+
   const overdueLessons = useMemo(() => {
     const today = parseISODate(todayISO());
     return allLessons()
@@ -105,10 +119,11 @@ export function ScheduleView() {
   async function syncTask(id: string, checked: boolean, payload: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE"; materia?: string }) {
     store.toggleDone(id);
     try {
-      await api("/api/tasks", {
+      const saved = await api<TaskRecord>("/api/tasks", {
         method: "POST",
         body: JSON.stringify({ externalId: id, titulo: payload.titulo, data: payload.data, tipo: payload.tipo, materia: payload.materia, status: checked ? "DONE" : "PENDING" })
       });
+      setTasks((current) => [saved, ...current.filter((task) => task.id !== saved.id)]);
     } catch {
       toast.warning("Alteracao salva localmente; faca login para sincronizar.");
     }
@@ -290,6 +305,9 @@ export function ScheduleView() {
             const first = rows[0];
             const isToday = date === todayISO();
             const lessonCount = rows.reduce((acc, row) => acc + row.aulas.length, 0);
+            const generatedReviews = (generatedReviewsByDate.get(date) || [])
+              .filter((task) => !store.discipline || task.materia === store.discipline)
+              .filter(() => !store.type || store.type === "revisao");
             return (
               <article key={date} className="card overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-violet-100 p-4 dark:border-white/10">
@@ -303,6 +321,17 @@ export function ScheduleView() {
                   </div>
                 </div>
                 <div className="grid gap-3 p-4">
+                  {generatedReviews.map((task) => (
+                    <button key={task.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 p-4 text-left dark:border-fuchsia-400/20 dark:bg-fuchsia-500/10" onClick={() => syncTask(task.externalId || task.id, !store.doneIds.includes(task.externalId || task.id), { titulo: task.titulo, data: toDateInput(task.data), tipo: "REVISAO", materia: task.materia || undefined })}>
+                      <span className="mt-1 grid h-6 w-6 place-items-center rounded-full border border-fuchsia-300">{store.doneIds.includes(task.externalId || task.id) && <Check size={15} />}</span>
+                      <span>
+                        <strong className="block">Revisão do caderno - {task.materia || "Caderno de erros"}</strong>
+                        <span className="text-sm text-slate-600 dark:text-slate-300">{task.titulo}</span>
+                        {task.descricao && <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{task.descricao}</span>}
+                      </span>
+                      <span className="badge bg-white text-fuchsia-700 dark:bg-slate-900 dark:text-fuchsia-200">Caderno</span>
+                    </button>
+                  ))}
                   {rows.flatMap((row) => [
                     ...row.aulas.map((lesson) => {
                       const priority = inferPriority(lesson);

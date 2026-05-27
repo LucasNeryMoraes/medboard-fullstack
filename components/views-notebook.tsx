@@ -44,7 +44,7 @@ const emptyNote = {
 };
 
 const emptyCard = {
-  deck: "",
+  deck: areas[0],
   materia: areas[0],
   tag: "",
   pergunta: "",
@@ -85,6 +85,8 @@ export function NotebookView() {
   const [quizReviewFilter, setQuizReviewFilter] = useState("Somente revisões de hoje/atrasadas");
   const [quizIndex, setQuizIndex] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
+  const [flashcardIndex, setFlashcardIndex] = useState(0);
+  const [showFlashcardAnswer, setShowFlashcardAnswer] = useState(false);
 
   useEffect(() => {
     Promise.all([api<Note[]>("/api/errors"), api<Flashcard[]>("/api/flashcards")])
@@ -99,10 +101,13 @@ export function NotebookView() {
   }, []);
 
   const automaticDecks = useMemo(() => {
-    return areas
-      .map((area) => ({ name: area, materia: area, count: notes.filter((note) => note.materia === area).length, auto: true }))
-      .filter((deck) => deck.count > 0);
-  }, [notes]);
+    return areas.map((area) => ({
+      name: area,
+      materia: area,
+      count: notes.filter((note) => note.materia === area).length + flashcards.filter((card) => card.materia === area || card.deck === area).length,
+      auto: true
+    }));
+  }, [notes, flashcards]);
 
   const savedManualDecks = useMemo(() => {
     const map = new Map<string, { name: string; materia: string; count: number; auto: boolean }>();
@@ -126,6 +131,7 @@ export function NotebookView() {
     const reviewOk = reviewFilter !== "Somente revisões de hoje/atrasadas" || compactDate(card.dueDate) <= today;
     return deckOk && areaOk && reviewOk;
   });
+  const currentFlashcard = filteredFlashcards[flashcardIndex];
   const quizItems = notes.filter((note) => {
     const noteDeck = note.materia || "Sem matéria";
     const deckOk = quizDeckFilter === "Todos os baralhos" || noteDeck === quizDeckFilter;
@@ -140,6 +146,11 @@ export function NotebookView() {
     setShowAnswer(false);
   }, [quizDeckFilter, quizAreaFilter, quizReviewFilter, notes.length]);
 
+  useEffect(() => {
+    setFlashcardIndex(0);
+    setShowFlashcardAnswer(false);
+  }, [deckFilter, areaFilter, reviewFilter, flashcards.length]);
+
   async function createDeck() {
     const name = deckForm.name.trim();
     if (!name) {
@@ -153,10 +164,6 @@ export function NotebookView() {
   }
 
   async function saveFlashcard() {
-    if (!cardForm.deck) {
-      toast.error("Crie ou selecione um baralho primeiro.");
-      return;
-    }
     if (!cardForm.pergunta.trim() || !cardForm.resposta.trim()) {
       toast.error("Preencha frente e verso do flashcard.");
       return;
@@ -166,8 +173,8 @@ export function NotebookView() {
       body: JSON.stringify({
         pergunta: cardForm.pergunta,
         resposta: cardForm.resposta,
-        materia: cardForm.materia,
-        deck: cardForm.deck,
+        materia: cardForm.materia || cardForm.deck,
+        deck: cardForm.deck || cardForm.materia,
         tag: cardForm.tag,
         imagem: cardForm.imagem || undefined
       })
@@ -232,6 +239,23 @@ export function NotebookView() {
     setQuizIndex((current) => Math.max(current - 1, 0));
   }
 
+  async function createScheduleReview(payload: { id: string; title: string; materia?: string | null; date: Date; source: "error-note" | "flashcard"; difficulty: string }) {
+    await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        externalId: `review-${payload.source}-${payload.id}-${payload.date.toLocaleDateString("sv-SE")}`,
+        titulo: payload.title,
+        descricao: `Revisão gerada pelo caderno de erros (${payload.difficulty}).`,
+        data: payload.date,
+        tipo: "REVISAO",
+        materia: payload.materia || "Caderno de erros",
+        prioridade: payload.difficulty === "Muito difícil" || payload.difficulty === "Difícil" ? "HIGH" : "MEDIUM",
+        status: "PENDING",
+        metadata: { source: payload.source, sourceId: payload.id, difficulty: payload.difficulty }
+      })
+    });
+  }
+
   async function markReviewed(label = "Revisado", days = 1) {
     if (!currentQuiz) return;
     const nextDate = new Date();
@@ -240,9 +264,48 @@ export function NotebookView() {
       method: "PATCH",
       body: JSON.stringify({ data: nextDate, dificuldade: label })
     });
+    await createScheduleReview({
+      id: currentQuiz.id,
+      title: currentQuiz.tema || currentQuiz.erro.slice(0, 80),
+      materia: currentQuiz.materia,
+      date: nextDate,
+      source: "error-note",
+      difficulty: label
+    });
     setNotes((current) => current.map((note) => note.id === updated.id ? updated : note));
-    toast.success("Revisão atualizada");
+    toast.success("Revisão adicionada ao cronograma");
     nextQuiz();
+  }
+
+  function nextFlashcard() {
+    setShowFlashcardAnswer(false);
+    setFlashcardIndex((current) => Math.min(current + 1, Math.max(filteredFlashcards.length - 1, 0)));
+  }
+
+  function previousFlashcard() {
+    setShowFlashcardAnswer(false);
+    setFlashcardIndex((current) => Math.max(current - 1, 0));
+  }
+
+  async function rateFlashcard(label: string, days: number) {
+    if (!currentFlashcard) return;
+    const nextDate = new Date();
+    nextDate.setDate(nextDate.getDate() + days);
+    const updated = await api<Flashcard>(`/api/flashcards/${currentFlashcard.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ dueDate: nextDate })
+    });
+    await createScheduleReview({
+      id: currentFlashcard.id,
+      title: currentFlashcard.tag || currentFlashcard.pergunta.slice(0, 80),
+      materia: currentFlashcard.materia || currentFlashcard.deck,
+      date: nextDate,
+      source: "flashcard",
+      difficulty: label
+    });
+    setFlashcards((current) => current.map((card) => card.id === updated.id ? updated : card));
+    toast.success("Flashcard agendado no cronograma");
+    nextFlashcard();
   }
 
   function editCurrentQuiz() {
@@ -361,6 +424,7 @@ export function NotebookView() {
             <select className="input" value={deckForm.materia} onChange={(event) => setDeckForm({ ...deckForm, materia: event.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
             <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={createDeck}>Criar baralho manual</button>
           </div>
+          <p className="mt-3 text-sm text-slate-500">Os baralhos das grandes áreas são criados automaticamente. Você pode estudar qualquer baralho quando quiser usando os filtros abaixo.</p>
           <div className="mt-4 grid gap-2">
             {deckOptions.map((deck) => <ItemRow key={`${deck.auto ? "auto" : "manual"}-${deck.name}`} title={deck.name} detail={`${deck.count} flashcard(s) · ${deck.materia}`} />)}
             {!deckOptions.length && <Empty text="Nenhum baralho ainda. Salve erros no caderno de erros para criar baralhos automáticos por matéria." />}
@@ -371,7 +435,7 @@ export function NotebookView() {
           <h3 className="text-lg font-black">Novo flashcard manual</h3>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
             <select className="input" value={cardForm.deck} onChange={(event) => setCardForm({ ...cardForm, deck: event.target.value })}>
-              <option value="">Crie um baralho manual primeiro</option>
+              <option value="">Selecione um baralho</option>
               {deckOptions.map((deck) => <option key={deck.name}>{deck.name}</option>)}
             </select>
             <input className="input" placeholder="Tag opcional. Ex.: arritmias, HAS, neonatologia" value={cardForm.tag} onChange={(event) => setCardForm({ ...cardForm, tag: event.target.value })} />
@@ -385,6 +449,7 @@ export function NotebookView() {
         </div>
 
         <div className="mt-5 rounded-2xl border border-slate-200 p-4 dark:border-white/10">
+          <h3 className="text-lg font-black">Estudar flashcards</h3>
           <div className="grid gap-3 md:grid-cols-2">
             <select className="input" value={deckFilter} onChange={(event) => setDeckFilter(event.target.value)}>
               <option>Todos os baralhos</option>
@@ -399,19 +464,34 @@ export function NotebookView() {
               <option>Todos os flashcards</option>
             </select>
           </div>
-          <div className="mt-5 grid gap-3">
-            {filteredFlashcards.map((card) => (
-              <div key={card.id} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
-                <div className="flex items-start justify-between gap-3">
-                  <div><strong>{card.pergunta}</strong><p className="text-sm text-slate-500">{card.deck || "Manual"} · {card.materia || "Sem matéria"}{card.tag ? ` · ${card.tag}` : ""}</p></div>
-                  <button className="btn-secondary px-3" onClick={() => removeFlashcard(card.id)}><Trash2 size={16} /></button>
-                </div>
-                <p className="mt-3 text-sm text-slate-700 dark:text-slate-200">{card.resposta}</p>
-                {card.imagem && <img className="mt-3 max-h-48 rounded-xl border border-slate-200 object-contain dark:border-white/10" src={card.imagem} alt="" />}
+          {currentFlashcard ? (
+            <div className="mt-5 grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-black text-violet-950 dark:text-violet-100">
+                <span>{flashcardIndex + 1} de {filteredFlashcards.length} · {currentFlashcard.deck || "Manual"} · {currentFlashcard.materia || "Sem matéria"}</span>
+                <button className="btn-secondary px-3" onClick={() => removeFlashcard(currentFlashcard.id)}><Trash2 size={16} /></button>
               </div>
-            ))}
-            {!filteredFlashcards.length && <Empty text="Nenhum flashcard vencido ou previsto para hoje. Para estudar mesmo assim, selecione Todos os flashcards." />}
-          </div>
+              <div className="grid min-h-56 content-center rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-6 dark:border-fuchsia-400/30 dark:from-violet-500/10 dark:to-fuchsia-500/10">
+                <span className="text-xs font-black uppercase tracking-wider text-fuchsia-600">{showFlashcardAnswer ? "Resposta e explicação" : "Pergunta"}</span>
+                <p className="mt-4 whitespace-pre-wrap text-base font-black text-violet-950 dark:text-violet-50">{showFlashcardAnswer ? currentFlashcard.resposta : currentFlashcard.pergunta}</p>
+                {currentFlashcard.imagem && !showFlashcardAnswer && <img className="mt-4 max-h-64 rounded-xl border border-slate-200 object-contain dark:border-white/10" src={currentFlashcard.imagem} alt="" />}
+              </div>
+              {showFlashcardAnswer && (
+                <div className="grid gap-2 md:grid-cols-4">
+                  <button className="btn-secondary min-h-16" onClick={() => rateFlashcard("Muito difícil", 1)}>Muito difícil<br /><span className="text-xs">rever amanhã</span></button>
+                  <button className="btn-secondary min-h-16" onClick={() => rateFlashcard("Difícil", 3)}>Difícil<br /><span className="text-xs">em 3 dias</span></button>
+                  <button className="btn-secondary min-h-16" onClick={() => rateFlashcard("Médio", 7)}>Médio<br /><span className="text-xs">em 7 dias</span></button>
+                  <button className="btn-primary min-h-16 bg-red-700 hover:bg-red-800" onClick={() => rateFlashcard("Fácil", 14)}>Fácil<br /><span className="text-xs">em 14 dias</span></button>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-secondary" onClick={previousFlashcard} disabled={flashcardIndex === 0}>Anterior</button>
+                <button className="btn-secondary" onClick={() => setShowFlashcardAnswer((value) => !value)}>{showFlashcardAnswer ? "Ver pergunta" : "Virar flashcard"}</button>
+                <button className="btn-secondary" onClick={nextFlashcard} disabled={flashcardIndex >= filteredFlashcards.length - 1}>Próximo</button>
+              </div>
+            </div>
+          ) : (
+            <Empty text="Nenhum flashcard vencido ou previsto para hoje. Para estudar mesmo assim, selecione Todos os flashcards." />
+          )}
         </div>
       </section>
     </div>
