@@ -140,6 +140,52 @@ export function ScheduleView() {
     }
   }
 
+  async function answerGeneratedReview(task: TaskRecord, correct: boolean) {
+    const externalId = task.externalId || task.id;
+    store.setDoneIds([...store.doneIds, externalId]);
+    const doneTask = await api<TaskRecord>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        externalId,
+        titulo: task.titulo,
+        descricao: correct ? "Revisão respondida corretamente." : "Revisão respondida com erro. Repetir amanhã.",
+        data: toDateInput(task.data),
+        tipo: "REVISAO",
+        materia: task.materia,
+        prioridade: correct ? "MEDIUM" : "HIGH",
+        status: "DONE",
+        metadata: { ...(typeof task.metadata === "object" && task.metadata ? task.metadata : {}), reviewResult: correct ? "correct" : "wrong" }
+      })
+    });
+    const nextTasks = [doneTask, ...tasks.filter((item) => item.id !== doneTask.id)];
+
+    if (!correct) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const retryDate = tomorrow.toLocaleDateString("sv-SE");
+      const retry = await api<TaskRecord>("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          externalId: `${externalId}-retry-${retryDate}`,
+          titulo: task.titulo,
+          descricao: "Revisão reagendada porque você errou novamente.",
+          data: retryDate,
+          tipo: "REVISAO",
+          materia: task.materia,
+          prioridade: "HIGH",
+          status: "PENDING",
+          metadata: { ...(typeof task.metadata === "object" && task.metadata ? task.metadata : {}), retryFrom: externalId, reviewResult: "wrong" }
+        })
+      });
+      nextTasks.unshift(retry);
+      toast.success("Marcado como erro. Reagendei para amanhã.");
+    } else {
+      toast.success("Revisão marcada como correta.");
+    }
+
+    setTasks(nextTasks);
+  }
+
   async function addExtraStudy() {
     if (!extraForm.titulo.trim() || !extraForm.materia || !extraForm.data || !extraForm.horas) {
       toast.error("Preencha tema, area, data e horas.");
@@ -321,17 +367,25 @@ export function ScheduleView() {
                   </div>
                 </div>
                 <div className="grid gap-3 p-4">
-                  {generatedReviews.map((task) => (
-                    <button key={task.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 p-4 text-left dark:border-fuchsia-400/20 dark:bg-fuchsia-500/10" onClick={() => syncTask(task.externalId || task.id, !store.doneIds.includes(task.externalId || task.id), { titulo: task.titulo, data: toDateInput(task.data), tipo: "REVISAO", materia: task.materia || undefined })}>
-                      <span className="mt-1 grid h-6 w-6 place-items-center rounded-full border border-fuchsia-300">{store.doneIds.includes(task.externalId || task.id) && <Check size={15} />}</span>
+                  {generatedReviews.map((task) => {
+                    const reviewDone = task.status === "DONE" || store.doneIds.includes(task.externalId || task.id);
+                    return (
+                    <div key={task.id} className="grid gap-3 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 p-4 text-left dark:border-fuchsia-400/20 dark:bg-fuchsia-500/10">
+                      <div className="grid grid-cols-[auto_1fr_auto] items-start gap-3">
+                      <span className="mt-1 grid h-6 w-6 place-items-center rounded-full border border-fuchsia-300">{reviewDone && <Check size={15} />}</span>
                       <span>
-                        <strong className="block">Revisão do caderno - {task.materia || "Caderno de erros"}</strong>
+                        <strong className="block">{reviewDone ? "Revisado" : "Revisão do caderno"} - {task.materia || "Caderno de erros"}</strong>
                         <span className="text-sm text-slate-600 dark:text-slate-300">{task.titulo}</span>
                         {task.descricao && <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{task.descricao}</span>}
                       </span>
-                      <span className="badge bg-white text-fuchsia-700 dark:bg-slate-900 dark:text-fuchsia-200">Caderno</span>
-                    </button>
-                  ))}
+                      <span className="badge bg-white text-fuchsia-700 dark:bg-slate-900 dark:text-fuchsia-200">{reviewDone ? "Feito" : "Caderno"}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pl-9">
+                        <button className="btn-secondary" disabled={reviewDone} onClick={() => answerGeneratedReview(task, true)}>Acertei</button>
+                        <button className="btn-primary bg-red-700 hover:bg-red-800" disabled={reviewDone} onClick={() => answerGeneratedReview(task, false)}>Errei</button>
+                      </div>
+                    </div>
+                  );})}
                   {rows.flatMap((row) => [
                     ...row.aulas.map((lesson) => {
                       const priority = inferPriority(lesson);
