@@ -6,9 +6,9 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], display: "swap" });
 
 export const metadata: Metadata = {
-  title: "Cronograma Lalazinha | Plataforma de Estudos",
+  title: "Cronograma Med | Plataforma de Estudos",
   description: "Cronograma, desempenho, caderno de erros, flashcards e produtividade em uma plataforma fullstack.",
-  applicationName: "Cronograma Lalazinha",
+  applicationName: "Cronograma Med",
   robots: { index: true, follow: true }
 };
 

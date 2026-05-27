@@ -28,6 +28,18 @@ function toDateInput(value: string | Date) {
   return Number.isNaN(date.getTime()) ? todayISO() : date.toLocaleDateString("sv-SE");
 }
 
+function clockToHours(value: string) {
+  const [hours = "0", minutes = "0"] = value.split(":");
+  return Number(hours) + Number(minutes) / 60;
+}
+
+function formatHours(value: number) {
+  const totalMinutes = Math.round(Number(value || 0) * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes ? `${hours}h${String(minutes).padStart(2, "0")}` : `${hours}h`;
+}
+
 export function ScheduleView() {
   const store = useMedboardStore();
   const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
@@ -168,7 +180,7 @@ export function ScheduleView() {
       titulo: extraForm.titulo.trim(),
       materia: extraForm.materia,
       data: extraForm.data,
-      horas: Number(extraForm.horas)
+      horas: clockToHours(extraForm.horas)
     };
     store.addExtraStudy(study);
     setExtraForm({ titulo: "", materia: "", data: todayISO(), horas: "" });
@@ -263,14 +275,14 @@ export function ScheduleView() {
             {areas.map((area) => <option key={area}>{area}</option>)}
           </select>
           <input className="input" type="date" value={extraForm.data} onChange={(event) => setExtraForm((current) => ({ ...current, data: event.target.value }))} />
-          <input className="input" type="number" min="0" step="0.25" placeholder="Horas estudadas" value={extraForm.horas} onChange={(event) => setExtraForm((current) => ({ ...current, horas: event.target.value }))} />
+          <input className="input" type="time" value={extraForm.horas} onChange={(event) => setExtraForm((current) => ({ ...current, horas: event.target.value }))} />
         </div>
         <button className="btn-primary mt-4 w-full bg-red-700 hover:bg-red-800" onClick={addExtraStudy}>Adicionar estudo</button>
         <div className="mt-5 grid gap-2">
           {store.extraStudies.map((study) => (
             <div key={study.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
               <strong>{study.titulo}</strong>
-              <span className="text-slate-500">{study.materia} - {study.data} - {study.horas}h</span>
+              <span className="text-slate-500">{study.materia} - {study.data} - {formatHours(study.horas)}</span>
             </div>
           ))}
           {!store.extraStudies.length && <p className="py-4 text-center text-sm text-slate-400">Nenhum estudo externo adicionando.</p>}

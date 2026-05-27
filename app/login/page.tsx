@@ -28,8 +28,8 @@ export default function LoginPage() {
     <main className="grid min-h-screen place-items-center bg-slate-950 p-4">
       <section className="card w-full max-w-md p-6">
         <div className="mb-6">
-          <div className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-brand-600 font-black text-white">CL</div>
-          <h1 className="text-2xl font-black tracking-tight">Entrar no Cronograma Lalazinha</h1>
+          <div className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-brand-600 font-black text-white">CM</div>
+          <h1 className="text-2xl font-black tracking-tight">Entrar no Cronograma Med</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Acesse seu cronograma, simulados e caderno de erros.</p>
         </div>
         <form className="grid gap-3" onSubmit={handleSubmit(onSubmit)}>

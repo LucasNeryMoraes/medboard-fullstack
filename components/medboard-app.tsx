@@ -38,20 +38,20 @@ export function MedboardApp({ userName }: { userName: string }) {
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Cronograma");
-    XLSX.writeFile(wb, "cronograma-lalazinha.xlsx");
+    XLSX.writeFile(wb, "cronograma-med.xlsx");
     toast.success("Excel exportado");
   }
 
   function exportPDF() {
     const pdf = new jsPDF();
     pdf.setFontSize(18);
-    pdf.text("Cronograma Lalazinha - Resumo do cronograma", 14, 18);
+    pdf.text("Cronograma Med - Resumo do cronograma", 14, 18);
     pdf.setFontSize(11);
     pdf.text(`Progresso: ${progress}%`, 14, 30);
     schedule.rows.slice(0, 34).forEach((row, index) => {
       pdf.text(`${row.dataBR} · ${row.semana} · ${row.assunto.slice(0, 80)}`, 14, 42 + index * 6);
     });
-    pdf.save("cronograma-lalazinha-resumo.pdf");
+    pdf.save("cronograma-med-resumo.pdf");
     toast.success("PDF exportado");
   }
 
@@ -68,9 +68,9 @@ export function MedboardApp({ userName }: { userName: string }) {
     <div className="min-h-screen">
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-white/10 bg-slate-950 px-4 py-5 text-white lg:flex lg:flex-col">
         <div className="mb-8 flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-white font-black text-brand-700">CL</div>
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-white font-black text-brand-700">CM</div>
           <div>
-            <div className="text-xl font-black tracking-tight">Cronograma Lalazinha</div>
+            <div className="text-xl font-black tracking-tight">Cronograma Med</div>
             <div className="text-xs text-slate-300">Plataforma de estudos</div>
           </div>
         </div>
@@ -96,7 +96,7 @@ export function MedboardApp({ userName }: { userName: string }) {
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <p className="text-sm font-semibold text-brand-600">Olá, {userName}</p>
-              <h1 className="text-2xl font-black tracking-tight lg:text-3xl">Central de estudos Cronograma Lalazinha</h1>
+              <h1 className="text-2xl font-black tracking-tight lg:text-3xl">Central de estudos Cronograma Med</h1>
             </div>
             <div className="flex flex-wrap gap-2">
               <button className="btn-secondary" onClick={fakeRealtimeSync}><Timer size={17} /> {syncState === "syncing" ? "Sincronizando..." : syncState === "done" ? "Sincronizado" : "Sync"}</button>

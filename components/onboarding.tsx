@@ -12,7 +12,7 @@ export function Onboarding() {
         <div className="mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-brand-50 text-brand-600 dark:bg-brand-700/20">
           <CheckCircle2 />
         </div>
-        <h2 className="text-2xl font-black tracking-tight">Seu Cronograma Lalazinha está pronto</h2>
+        <h2 className="text-2xl font-black tracking-tight">Seu Cronograma Med está pronto</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
           O cronograma original foi convertido para uma plataforma com checklists, dashboard, caderno de erros, simulados, exportações e persistência fullstack.
         </p>

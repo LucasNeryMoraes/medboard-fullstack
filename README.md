@@ -1,4 +1,4 @@
-# Cronograma Lalazinha Fullstack
+# Cronograma Med Fullstack
 
 Plataforma fullstack em Next.js 15 para cronograma de estudos, simulados, dashboard, caderno de erros, flashcards, cronômetro e produtividade.
 

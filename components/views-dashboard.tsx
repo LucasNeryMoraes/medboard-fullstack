@@ -13,6 +13,16 @@ type Productivity = { id: string; data: string; materia: string | null; horas: n
 type ErrorNote = { id: string; tema: string; materia: string | null };
 
 const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
+const clockToHours = (value: string) => {
+  const [hours = "0", minutes = "0"] = value.split(":");
+  return Number(hours) + Number(minutes) / 60;
+};
+const formatHours = (value: number) => {
+  const totalMinutes = Math.round(Number(value || 0) * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes ? `${hours}h${String(minutes).padStart(2, "0")}` : `${hours}h`;
+};
 
 export function DashboardView() {
   const doneIds = useMedboardStore((state) => state.doneIds);
@@ -115,7 +125,7 @@ export function DashboardView() {
     }
     const saved = await api<Productivity>("/api/productivity", {
       method: "POST",
-      body: JSON.stringify({ ...hoursForm, horas: Number(hoursForm.horas), rendimento: 100 })
+      body: JSON.stringify({ ...hoursForm, horas: clockToHours(hoursForm.horas), rendimento: 100 })
     });
     setProductivity((current) => [saved, ...current]);
     setHoursForm((current) => ({ ...current, horas: "", observacoes: "" }));
@@ -218,24 +228,24 @@ export function DashboardView() {
             <div className="grid gap-3 md:grid-cols-3">
               <input className="input" type="date" value={hoursForm.data} onChange={(e) => setHoursForm({ ...hoursForm, data: e.target.value })} />
               <select className="input" value={hoursForm.materia} onChange={(e) => setHoursForm({ ...hoursForm, materia: e.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
-              <input className="input" type="number" min="0" step="0.25" placeholder="Horas estudadas. Ex.: 1.5" value={hoursForm.horas} onChange={(e) => setHoursForm({ ...hoursForm, horas: e.target.value })} />
+              <input className="input" type="time" value={hoursForm.horas} onChange={(e) => setHoursForm({ ...hoursForm, horas: e.target.value })} />
             </div>
             <input className="input mt-3" placeholder="Observação opcional. Ex.: aula de HAS + 20 questões" value={hoursForm.observacoes} onChange={(e) => setHoursForm({ ...hoursForm, observacoes: e.target.value })} />
             <button className="btn-primary mt-3 w-full bg-red-700 hover:bg-red-800" onClick={addHours}>Adicionar horas estudadas</button>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <Metric title="Horas totais" value={`${Math.round(hoursTotal * 10) / 10}h`} />
+            <Metric title="Horas totais" value={formatHours(hoursTotal)} />
             <Metric title="Dias ativos" value={activeDays} />
-            <Metric title="Média por dia ativo" value={`${activeDays ? Math.round((hoursTotal / activeDays) * 10) / 10 : 0}h`} />
+            <Metric title="Média por dia ativo" value={formatHours(activeDays ? hoursTotal / activeDays : 0)} />
           </div>
           <h3 className="mt-5 text-sm font-black">Distribuição por matéria</h3>
           <div className="mt-3 grid gap-2">
-            {hoursByArea.map((item) => <Row key={item.area} left={item.area} right={`${Math.round(item.horas * 10) / 10}h`} />)}
+            {hoursByArea.map((item) => <Row key={item.area} left={item.area} right={formatHours(item.horas)} />)}
             {!hoursByArea.length && <Empty text="Ainda não há horas registradas por matéria." />}
           </div>
           <h3 className="mt-5 text-sm font-black">Últimos registros</h3>
           <div className="mt-3 grid gap-2">
-            {productivity.slice(0, 5).map((item) => <Row key={item.id} left={`${compactDate(item.data)} · ${item.materia || "Sem matéria"}`} right={`${item.horas}h`} />)}
+            {productivity.slice(0, 5).map((item) => <Row key={item.id} left={`${compactDate(item.data)} · ${item.materia || "Sem matéria"}`} right={formatHours(item.horas)} />)}
             {!productivity.length && <Empty text="Nenhum registro manual ainda. Adicione suas horas acima." />}
           </div>
         </article>
