@@ -60,6 +60,14 @@ export const lessonQuestionSchema = z.object({
   observacoes: z.string().optional().nullable()
 });
 
+export const dailyQuestionSchema = z.object({
+  data: z.coerce.date(),
+  materia: z.string().min(1),
+  acertos: z.coerce.number().int().min(0).default(0),
+  erros: z.coerce.number().int().min(0).default(0),
+  observacoes: z.string().optional().nullable()
+});
+
 export const scheduleWeekSchema = z.object({
   semana: z.string().min(1),
   tarefas: z.unknown().default([]),
