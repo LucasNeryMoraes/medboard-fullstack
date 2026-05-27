@@ -49,3 +49,22 @@ export async function POST(req: NextRequest) {
     return fail(error);
   }
 }
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const userId = await requireUserId();
+    const { searchParams } = req.nextUrl;
+    const source = searchParams.get("source");
+    const sourceId = searchParams.get("sourceId");
+    if (!source || !sourceId) return fail(new Error("source e sourceId sao obrigatorios"), 422);
+
+    const tasks = await prisma.task.findMany({
+      where: { userId, tipo: "REVISAO", externalId: { startsWith: `review-${source}-${sourceId}-` } },
+      select: { id: true }
+    });
+    await prisma.task.deleteMany({ where: { userId, id: { in: tasks.map((task) => task.id) } } });
+    return ok({ deleted: tasks.length });
+  } catch (error) {
+    return fail(error);
+  }
+}

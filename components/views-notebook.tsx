@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ImagePlus, Shuffle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
+import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { areas, todayISO } from "@/utils/schedule";
 
 type Note = {
@@ -74,6 +75,8 @@ async function fileToDataUrl(file?: File) {
 }
 
 export function NotebookView() {
+  const reviewTarget = useMedboardStore((state) => state.reviewTarget);
+  const setReviewTarget = useMedboardStore((state) => state.setReviewTarget);
   const [notes, setNotes] = useState<Note[]>([]);
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [noteForm, setNoteForm] = useState(emptyNote);
@@ -113,6 +116,30 @@ export function NotebookView() {
   const currentNote = noteSession[noteIndex];
   const currentFlashcard = flashSession[flashIndex];
 
+  useEffect(() => {
+    if (!reviewTarget) return;
+    if (reviewTarget.source === "error-note" && notes.length) {
+      const target = notes.find((note) => note.id === reviewTarget.sourceId);
+      if (target) {
+        setNoteArea(target.materia || "Todas as matérias");
+        setNoteMode("Todos os erros");
+        setNoteSession([target]);
+        setNoteIndex(0);
+        setShowNoteAnswer(false);
+      }
+    }
+    if (reviewTarget.source === "flashcard" && flashcards.length) {
+      const target = flashcards.find((card) => card.id === reviewTarget.sourceId);
+      if (target) {
+        setFlashArea(target.materia || target.deck || "Todas as matérias");
+        setFlashMode("Todos os flashcards");
+        setFlashSession([target]);
+        setFlashIndex(0);
+        setShowFlashAnswer(false);
+      }
+    }
+  }, [reviewTarget, notes, flashcards]);
+
   function dueNote(note: Note) {
     return compactDate(note.data || note.createdAt) <= today;
   }
@@ -136,6 +163,19 @@ export function NotebookView() {
         metadata: { source: payload.source, sourceId: payload.id, difficulty: payload.difficulty }
       })
     });
+  }
+
+  async function completeOpenedReminder(source: "error-note" | "flashcard", sourceId: string) {
+    if (!reviewTarget || reviewTarget.source !== source || reviewTarget.sourceId !== sourceId || !reviewTarget.taskId) return;
+    await api(`/api/tasks/${reviewTarget.taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "DONE", descricao: "Respondido no caderno." })
+    });
+    setReviewTarget(null);
+  }
+
+  async function removeLinkedScheduleReviews(source: "error-note" | "flashcard", sourceId: string) {
+    await api(`/api/tasks?source=${encodeURIComponent(source)}&sourceId=${encodeURIComponent(sourceId)}`, { method: "DELETE" });
   }
 
   function nextDate(days: number) {
@@ -188,15 +228,19 @@ export function NotebookView() {
 
   async function removeNote(id: string) {
     await api(`/api/errors/${id}`, { method: "DELETE" });
+    await removeLinkedScheduleReviews("error-note", id);
     setNotes((current) => current.filter((note) => note.id !== id));
     setNoteSession((current) => current.filter((note) => note.id !== id));
+    if (reviewTarget?.source === "error-note" && reviewTarget.sourceId === id) setReviewTarget(null);
     toast.success("Erro apagado");
   }
 
   async function removeFlashcard(id: string) {
     await api(`/api/flashcards/${id}`, { method: "DELETE" });
+    await removeLinkedScheduleReviews("flashcard", id);
     setFlashcards((current) => current.filter((card) => card.id !== id));
     setFlashSession((current) => current.filter((card) => card.id !== id));
+    if (reviewTarget?.source === "flashcard" && reviewTarget.sourceId === id) setReviewTarget(null);
     toast.success("Flashcard apagado");
   }
 
@@ -259,6 +303,7 @@ export function NotebookView() {
       source: "error-note",
       difficulty: label
     });
+    await completeOpenedReminder("error-note", currentNote.id);
     setNotes((current) => current.map((note) => note.id === updated.id ? updated : note));
     setNoteSession((current) => current.map((note) => note.id === updated.id ? updated : note));
     toast.success("Revisão adicionada ao cronograma");
@@ -280,6 +325,7 @@ export function NotebookView() {
       source: "flashcard",
       difficulty: label
     });
+    await completeOpenedReminder("flashcard", currentFlashcard.id);
     setFlashcards((current) => current.map((card) => card.id === updated.id ? updated : card));
     setFlashSession((current) => current.map((card) => card.id === updated.id ? updated : card));
     toast.success("Flashcard adicionado ao cronograma");

@@ -7,6 +7,7 @@ import type { TabKey } from "@/types/schedule";
 type Board = Record<string, Record<string, string>>;
 export type LessonQuestionState = Record<string, { done: boolean; feitas: number; acertos: number; erros: number; observacoes: string }>;
 export type ExtraStudy = { id: string; titulo: string; materia: string; data: string; horas: number };
+export type ReviewTarget = { source: "error-note" | "flashcard"; sourceId: string; materia?: string | null; taskId?: string; externalId?: string | null } | null;
 
 type MedboardState = {
   tab: TabKey;
@@ -18,8 +19,10 @@ type MedboardState = {
   board: Board;
   lessonQuestions: LessonQuestionState;
   extraStudies: ExtraStudy[];
+  reviewTarget: ReviewTarget;
   onboardingDone: boolean;
   setTab: (tab: TabKey) => void;
+  setReviewTarget: (target: ReviewTarget) => void;
   setFilter: (key: "search" | "week" | "discipline" | "type", value: string) => void;
   toggleDone: (id: string) => void;
   setDoneIds: (ids: string[]) => void;
@@ -49,8 +52,10 @@ export const useMedboardStore = create<MedboardState>()(
       board: {},
       lessonQuestions: {},
       extraStudies: [],
+      reviewTarget: null,
       onboardingDone: false,
       setTab: (tab) => set({ tab }),
+      setReviewTarget: (reviewTarget) => set({ reviewTarget }),
       setFilter: (key, value) => set({ [key]: value }),
       toggleDone: (id) =>
         set((state) => ({
