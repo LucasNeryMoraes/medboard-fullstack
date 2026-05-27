@@ -8,7 +8,7 @@ import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
 import { allLessons, allProgressIds, areas, parseISODate, schedule, todayISO } from "@/utils/schedule";
 
-type DailyQuestion = { id: string; data: string; materia: string; acertos: number; erros: number; observacoes: string | null };
+type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
 type ErrorNote = { id: string; tema: string; materia: string | null };
 
@@ -16,24 +16,24 @@ const compactDate = (value: string | Date) => new Date(value).toLocaleDateString
 
 export function DashboardView() {
   const doneIds = useMedboardStore((state) => state.doneIds);
+  const storeQuestions = useMedboardStore((state) => state.lessonQuestions);
   const setTab = useMedboardStore((state) => state.setTab);
   const ids = useMemo(() => allProgressIds(), []);
   const lessons = useMemo(() => allLessons(), []);
-  const [daily, setDaily] = useState<DailyQuestion[]>([]);
+  const [lessonQuestionRecords, setLessonQuestionRecords] = useState<LessonQuestionRecord[]>([]);
   const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [errors, setErrors] = useState<ErrorNote[]>([]);
-  const [dailyForm, setDailyForm] = useState({ data: todayISO(), materia: areas[0], acertos: "0", erros: "0", observacoes: "" });
   const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], horas: "", observacoes: "" });
 
   useEffect(() => {
-    Promise.all([api<DailyQuestion[]>("/api/daily-questions"), api<Productivity[]>("/api/productivity"), api<ErrorNote[]>("/api/errors")])
-      .then(([dailyItems, productivityItems, errorItems]) => {
-        setDaily(dailyItems);
+    Promise.all([api<LessonQuestionRecord[]>("/api/lesson-questions"), api<Productivity[]>("/api/productivity"), api<ErrorNote[]>("/api/errors")])
+      .then(([questionItems, productivityItems, errorItems]) => {
+        setLessonQuestionRecords(questionItems);
         setProductivity(productivityItems);
         setErrors(errorItems);
       })
       .catch(() => {
-        setDaily([]);
+        setLessonQuestionRecords([]);
         setProductivity([]);
         setErrors([]);
       });
@@ -47,22 +47,46 @@ export function DashboardView() {
     return { area: area.replace("Ginecologia e Obstetrícia", "GO").replace("Clínica Médica", "Clínica"), progresso: total ? Math.round((done / total) * 100) : 0 };
   });
 
-  const dailyTotals = useMemo(() => {
-    const today = todayISO();
-    const totalAcertos = daily.reduce((acc, item) => acc + item.acertos, 0);
-    const totalErros = daily.reduce((acc, item) => acc + item.erros, 0);
-    const todayItems = daily.filter((item) => compactDate(item.data) === today);
-    const todayAcertos = todayItems.reduce((acc, item) => acc + item.acertos, 0);
-    const todayErros = todayItems.reduce((acc, item) => acc + item.erros, 0);
-    return { totalAcertos, totalErros, total: totalAcertos + totalErros, todayAcertos, todayErros, today: todayAcertos + todayErros };
-  }, [daily]);
+  const questionByLesson = useMemo(() => {
+    const remote = Object.fromEntries(lessonQuestionRecords.map((item) => [item.lessonId, {
+      done: item.done,
+      feitas: item.feitas,
+      acertos: item.acertos,
+      erros: item.erros,
+      observacoes: item.observacoes || ""
+    }]));
+    return { ...remote, ...storeQuestions };
+  }, [lessonQuestionRecords, storeQuestions]);
 
-  const dailyByArea = areas.map((area) => {
-    const items = daily.filter((item) => item.materia === area);
-    const acertos = items.reduce((acc, item) => acc + item.acertos, 0);
-    const erros = items.reduce((acc, item) => acc + item.erros, 0);
-    return { area, acertos, erros, total: acertos + erros };
-  }).filter((item) => item.total > 0);
+  const questionsByArea = useMemo(() => areas.map((area) => {
+    const areaLessons = lessons.filter((lesson) => lesson.disciplina === area);
+    const stats = areaLessons.reduce((acc, lesson) => {
+      const item = questionByLesson[lesson.id];
+      if (!item) return acc;
+      acc.acertos += Number(item.acertos || 0);
+      acc.erros += Number(item.erros || 0);
+      acc.feitas += Math.max(Number(item.feitas || 0), Number(item.acertos || 0) + Number(item.erros || 0));
+      if (item.done || item.feitas || item.acertos || item.erros) acc.aulas += 1;
+      return acc;
+    }, { acertos: 0, erros: 0, feitas: 0, aulas: 0 });
+    const respondidas = stats.acertos + stats.erros;
+    const percentual = respondidas ? Math.round((stats.acertos / respondidas) * 100) : 0;
+    const erroPercentual = respondidas ? Math.round((stats.erros / respondidas) * 100) : 0;
+    return { area, ...stats, respondidas, percentual, erroPercentual, totalAulas: areaLessons.length };
+  }), [lessons, questionByLesson]);
+
+  const questionTotals = useMemo(() => {
+    const acertos = questionsByArea.reduce((acc, item) => acc + item.acertos, 0);
+    const erros = questionsByArea.reduce((acc, item) => acc + item.erros, 0);
+    const feitas = questionsByArea.reduce((acc, item) => acc + item.feitas, 0);
+    const aulas = questionsByArea.reduce((acc, item) => acc + item.aulas, 0);
+    const respondidas = acertos + erros;
+    return { acertos, erros, feitas, aulas, respondidas, percentual: respondidas ? Math.round((acertos / respondidas) * 100) : 0 };
+  }, [questionsByArea]);
+
+  const rankedAreas = questionsByArea.filter((item) => item.respondidas > 0).sort((a, b) => b.percentual - a.percentual);
+  const bestAreas = rankedAreas.slice(0, 3);
+  const worstAreas = [...rankedAreas].sort((a, b) => a.percentual - b.percentual).slice(0, 3);
 
   const wrongRanking = Object.entries(errors.reduce<Record<string, number>>((acc, item) => {
     const key = `${item.tema}${item.materia ? ` · ${item.materia}` : ""}`;
@@ -83,14 +107,6 @@ export function DashboardView() {
     { label: "Dias do cronograma", value: schedule.stats.totalDias, icon: CalendarCheck2, detail: `${schedule.stats.inicio} ate ${schedule.stats.fim}` },
     { label: "Revisoes planejadas", value: schedule.stats.totalRevisoes, icon: Clock3, detail: "15 e 30 dias" }
   ];
-
-  async function addDaily() {
-    const payload = { ...dailyForm, acertos: Number(dailyForm.acertos || 0), erros: Number(dailyForm.erros || 0) };
-    const saved = await api<DailyQuestion>("/api/daily-questions", { method: "POST", body: JSON.stringify(payload) });
-    setDaily((current) => [saved, ...current]);
-    setDailyForm((current) => ({ ...current, acertos: "0", erros: "0", observacoes: "" }));
-    toast.success("Questões registradas");
-  }
 
   async function addHours() {
     if (!hoursForm.horas) {
@@ -155,37 +171,32 @@ export function DashboardView() {
       </section>
 
       <section className="card p-5">
-        <h2 className="text-lg font-black">Controle diário de questões por grande área</h2>
-        <p className="mt-1 text-sm text-slate-500">Registre as questões feitas no dia a dia, separando acertos e erros por área estudada. Isso fica independente dos simulados.</p>
-        <div className="mt-4 rounded-2xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
-          <div className="grid gap-3 lg:grid-cols-[.95fr_.95fr_.95fr_.95fr_auto]">
-            <label className="grid gap-1 text-xs font-black uppercase tracking-wider text-slate-500">Data<input className="input" type="date" value={dailyForm.data} onChange={(e) => setDailyForm({ ...dailyForm, data: e.target.value })} /></label>
-            <label className="grid gap-1 text-xs font-black uppercase tracking-wider text-slate-500">Grande área<select className="input" value={dailyForm.materia} onChange={(e) => setDailyForm({ ...dailyForm, materia: e.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select></label>
-            <label className="grid gap-1 text-xs font-black uppercase tracking-wider text-slate-500">Acertos<input className="input" type="number" min="0" value={dailyForm.acertos} onChange={(e) => setDailyForm({ ...dailyForm, acertos: e.target.value })} /></label>
-            <label className="grid gap-1 text-xs font-black uppercase tracking-wider text-slate-500">Erros<input className="input" type="number" min="0" value={dailyForm.erros} onChange={(e) => setDailyForm({ ...dailyForm, erros: e.target.value })} /></label>
-            <button className="btn-primary self-end bg-red-700 hover:bg-red-800" onClick={addDaily}>Adicionar</button>
-          </div>
-          <label className="mt-3 grid gap-1 text-xs font-black uppercase tracking-wider text-slate-500">Observação<input className="input" placeholder="Ex.: 20 questões de pneumonia, bloco de HAS, revisão de prova..." value={dailyForm.observacoes} onChange={(e) => setDailyForm({ ...dailyForm, observacoes: e.target.value })} /></label>
-        </div>
+        <h2 className="text-lg font-black">Controle automático de questões por grande área</h2>
+        <p className="mt-1 text-sm text-slate-500">Dados puxados automaticamente da aba Cronograma, a partir dos campos de questões, acertos e erros preenchidos em cada aula.</p>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <Metric title="Hoje" value={dailyTotals.today} detail={`${dailyTotals.todayAcertos} acertos · ${dailyTotals.todayErros} erros`} />
-          <Metric title="Total registrado" value={dailyTotals.total} detail="questões" />
-          <Metric title="Acertos" value={dailyTotals.totalAcertos} detail={`${dailyTotals.total ? Math.round((dailyTotals.totalAcertos / dailyTotals.total) * 100) : 0}% de aproveitamento`} />
-          <Metric title="Erros" value={dailyTotals.totalErros} detail="para revisar no caderno" />
+          <Metric title="Questões registradas" value={questionTotals.feitas || questionTotals.respondidas} detail={`${questionTotals.aulas} aula(s) com questões`} />
+          <Metric title="Acertos" value={questionTotals.acertos} detail={`${questionTotals.percentual}% de aproveitamento`} />
+          <Metric title="Erros" value={questionTotals.erros} detail="para revisar no caderno" />
+          <Metric title="Áreas monitoradas" value={rankedAreas.length} detail={`${areas.length} grandes áreas no cronograma`} />
         </div>
-        <div className="mt-5 grid gap-6 lg:grid-cols-2">
+        <div className="mt-5 grid gap-6 xl:grid-cols-[1.2fr_.8fr]">
           <div>
             <h3 className="text-sm font-black">Resumo por grande área</h3>
             <div className="mt-3 grid gap-2">
-              {dailyByArea.map((item) => <Row key={item.area} left={item.area} right={`${item.acertos} acertos · ${item.erros} erros`} />)}
-              {!dailyByArea.length && <Empty text="Registre suas questões do dia a dia para montar o desempenho por grande área." />}
+              {questionsByArea.map((item) => (
+                <AreaInsight key={item.area} item={item} />
+              ))}
             </div>
           </div>
           <div>
-            <h3 className="text-sm font-black">Últimos registros</h3>
-            <div className="mt-3 grid gap-2">
-              {daily.slice(0, 5).map((item) => <Row key={item.id} left={`${compactDate(item.data)} · ${item.materia}`} right={`${item.acertos}A · ${item.erros}E`} />)}
-              {!daily.length && <Empty text="Nenhum registro diário ainda." />}
+            <h3 className="text-sm font-black">Overview dos estudos</h3>
+            <div className="mt-3 grid gap-3">
+              <InsightBox title="Melhor desempenho" items={bestAreas} empty="Preencha acertos e erros no cronograma para descobrir suas áreas mais fortes." tone="good" />
+              <InsightBox title="Precisa de mais revisão" items={worstAreas} empty="Ainda não há dados suficientes para apontar os pontos fracos." tone="risk" />
+              <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 text-sm dark:border-violet-400/20 dark:bg-slate-900">
+                <strong>Leitura rápida</strong>
+                <p className="mt-1 text-slate-500">{questionTotals.respondidas ? `Você tem ${questionTotals.percentual}% de aproveitamento geral, com ${questionTotals.erros} erro(s) distribuídos nas matérias preenchidas no cronograma.` : "Assim que você preencher questões nas aulas do cronograma, este painel passa a mostrar seu aproveitamento por matéria automaticamente."}</p>
+              </div>
             </div>
           </div>
         </div>
@@ -239,6 +250,39 @@ function Metric({ title, value, detail }: { title: string; value: string | numbe
       <span className="text-xs font-black uppercase tracking-wider text-slate-500">{title}</span>
       <strong className="block text-2xl font-black">{value}</strong>
       {detail && <small className="text-slate-500">{detail}</small>}
+    </div>
+  );
+}
+
+function AreaInsight({ item }: { item: { area: string; acertos: number; erros: number; feitas: number; aulas: number; respondidas: number; percentual: number; erroPercentual: number } }) {
+  return (
+    <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <strong>{item.area}</strong>
+        <span className="text-sm font-black">{item.respondidas ? `${item.percentual}%` : "sem dados"}</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
+        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${item.percentual}%` }} />
+      </div>
+      <p className="mt-2 text-sm text-slate-500">{item.acertos} acertos · {item.erros} erros · {item.aulas} aula(s) preenchidas</p>
+      {!!item.respondidas && <p className="mt-1 text-xs text-slate-400">{item.erroPercentual}% das respostas registradas viraram erro.</p>}
+    </div>
+  );
+}
+
+function InsightBox({ title, items, empty, tone }: { title: string; items: { area: string; percentual: number; acertos: number; erros: number; respondidas: number }[]; empty: string; tone: "good" | "risk" }) {
+  return (
+    <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
+      <strong>{title}</strong>
+      <div className="mt-3 grid gap-2">
+        {items.map((item) => (
+          <div key={item.area} className="flex items-center justify-between gap-3 text-sm">
+            <span>{item.area}</span>
+            <span className={`font-black ${tone === "good" ? "text-emerald-600" : "text-red-600"}`}>{item.percentual}%</span>
+          </div>
+        ))}
+        {!items.length && <p className="text-sm text-slate-500">{empty}</p>}
+      </div>
     </div>
   );
 }
