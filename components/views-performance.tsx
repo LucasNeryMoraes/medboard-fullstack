@@ -1,82 +1,145 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
-import { z } from "zod";
 import { api } from "@/services/api";
-import { areas } from "@/utils/schedule";
+import { areas, isSaturday, schedule } from "@/utils/schedule";
 
-const schema = z.object({
-  examName: z.string().min(2),
-  materia: z.string().min(1),
-  acertos: z.coerce.number().min(0),
-  erros: z.coerce.number().min(0)
-});
+type Performance = { id: string; materia: string; acertos: number; erros: number; percentual: number; examName: string | null; data: string; createdAt: string };
 
-type FormData = z.infer<typeof schema>;
-type Performance = FormData & { id: string; percentual: number; createdAt: string };
+const emptyAreas = () => Object.fromEntries(areas.map((area) => [area, { acertos: "", erros: "" }])) as Record<string, { acertos: string; erros: string }>;
 
 export function PerformanceView() {
   const [items, setItems] = useState<Performance[]>([]);
-  const { register, handleSubmit, reset, formState: { isSubmitting } } = useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { materia: areas[0], acertos: 0, erros: 0 } });
+  const [form, setForm] = useState({ examName: "", data: "", observacoes: "", areas: emptyAreas() });
 
   useEffect(() => {
     api<Performance[]>("/api/performance").then(setItems).catch(() => setItems([]));
   }, []);
 
-  const chart = useMemo(() => [...items].reverse().map((item, index) => ({ name: item.examName || `Sim ${index + 1}`, percentual: item.percentual })), [items]);
-  const media = items.length ? Math.round(items.reduce((acc, item) => acc + item.percentual, 0) / items.length) : 0;
+  const summary = useMemo(() => {
+    return areas.map((area) => {
+      const areaItems = items.filter((item) => item.materia === area);
+      const acertos = areaItems.reduce((acc, item) => acc + item.acertos, 0);
+      const erros = areaItems.reduce((acc, item) => acc + item.erros, 0);
+      const total = acertos + erros;
+      return { area, acertos, erros, total, pct: total ? Math.round((acertos / total) * 100) : 0 };
+    });
+  }, [items]);
 
-  async function onSubmit(data: FormData) {
-    const saved = await api<Performance>("/api/performance", { method: "POST", body: JSON.stringify(data) });
-    setItems((current) => [saved, ...current]);
-    reset({ examName: "", materia: data.materia, acertos: 0, erros: 0 });
-    toast.success("Simulado salvo");
+  const scheduled = useMemo(() => {
+    return schedule.rows
+      .filter((row) => isSaturday(row.data))
+      .map((row) => ({
+        id: row.data,
+        title: `Simulado semanal · ${row.semana}`,
+        subtitle: `${row.dataBR} · ${row.semana} · pendente`
+      }));
+  }, []);
+
+  function updateArea(area: string, field: "acertos" | "erros", value: string) {
+    setForm((current) => ({ ...current, areas: { ...current.areas, [area]: { ...current.areas[area], [field]: value } } }));
+  }
+
+  async function savePerformance(extra = false) {
+    const examName = form.examName.trim() || (extra ? "Simulado extra" : "Simulado semanal");
+    const entries = Object.entries(form.areas)
+      .map(([materia, values]) => ({ materia, acertos: Number(values.acertos || 0), erros: Number(values.erros || 0) }))
+      .filter((entry) => entry.acertos > 0 || entry.erros > 0);
+
+    if (!entries.length) {
+      toast.error("Preencha acertos ou erros em pelo menos uma grande área.");
+      return;
+    }
+
+    const saved: Performance[] = [];
+    for (const entry of entries) {
+      const item = await api<Performance>("/api/performance", {
+        method: "POST",
+        body: JSON.stringify({ ...entry, examName, data: form.data || undefined })
+      });
+      saved.push(item);
+    }
+    setItems((current) => [...saved, ...current]);
+    setForm({ examName: "", data: "", observacoes: "", areas: emptyAreas() });
+    toast.success(extra ? "Simulado extra salvo" : "Desempenho salvo");
+  }
+
+  function fillScheduled(item: { title: string; id: string }) {
+    setForm((current) => ({ ...current, examName: item.title, data: item.id }));
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
-      <article className="card p-5">
-        <h2 className="text-lg font-black">Registrar desempenho</h2>
-        <form className="mt-4 grid gap-3" onSubmit={handleSubmit(onSubmit)}>
-          <input className="input" placeholder="Nome do simulado" {...register("examName")} />
-          <select className="input" {...register("materia")}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
-          <div className="grid grid-cols-2 gap-3">
-            <input className="input" type="number" placeholder="Acertos" {...register("acertos")} />
-            <input className="input" type="number" placeholder="Erros" {...register("erros")} />
+    <div className="grid gap-6">
+      <section className="grid gap-6 xl:grid-cols-2">
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Registrar simulado</h2>
+          <div className="mt-4 grid gap-3">
+            <input className="input" placeholder="Nome do simulado" value={form.examName} onChange={(event) => setForm((current) => ({ ...current, examName: event.target.value }))} />
+            <input className="input" type="date" value={form.data} onChange={(event) => setForm((current) => ({ ...current, data: event.target.value }))} />
+            <textarea className="input min-h-20" placeholder="Observações importantes do simulado" value={form.observacoes} onChange={(event) => setForm((current) => ({ ...current, observacoes: event.target.value }))} />
+            <div className="grid gap-3 md:grid-cols-2">
+              {areas.map((area) => (
+                <div key={area} className="rounded-2xl border border-slate-200 p-3 dark:border-white/10">
+                  <strong className="text-sm">{area}</strong>
+                  <input className="input mt-3" type="number" min="0" placeholder="Acertos" value={form.areas[area].acertos} onChange={(event) => updateArea(area, "acertos", event.target.value)} />
+                  <input className="input mt-2" type="number" min="0" placeholder="Erros" value={form.areas[area].erros} onChange={(event) => updateArea(area, "erros", event.target.value)} />
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={() => savePerformance(false)}>Salvar desempenho</button>
+              <button className="btn-secondary" onClick={() => savePerformance(true)}>Adicionar simulado extra</button>
+              <button className="btn-secondary" onClick={() => setForm({ examName: "", data: "", observacoes: "", areas: emptyAreas() })}>Limpar edição</button>
+            </div>
           </div>
-          <button className="btn-primary" disabled={isSubmitting}>Salvar desempenho</button>
-        </form>
-      </article>
+        </article>
 
-      <article className="card p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-black">Evolução</h2>
-          <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-700/20">Média {media}%</span>
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Desempenho por área</h2>
+          <div className="mt-4 grid gap-3">
+            {summary.map((item) => (
+              <div key={item.area} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
+                <strong className="text-sm text-fuchsia-600">{item.area}</strong>
+                <p className="text-sm">{item.pct}% de acertos acumulados</p>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-violet-100 dark:bg-white/10">
+                  <div className="h-full rounded-full bg-fuchsia-500" style={{ width: `${item.pct}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="card p-5">
+        <h2 className="text-lg font-black">Simulados programados</h2>
+        <p className="mt-1 text-sm text-slate-500">Clique em cada simulado para preencher ou editar o desempenho quando fizer.</p>
+        <div className="mt-4 grid gap-3">
+          {scheduled.map((item) => (
+            <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-400/20 dark:bg-violet-500/10">
+              <div>
+                <strong>{item.title}</strong>
+                <p className="text-sm text-slate-500 dark:text-slate-300">{item.subtitle}</p>
+              </div>
+              <button className="btn-secondary" onClick={() => fillScheduled(item)}>Preencher</button>
+            </div>
+          ))}
         </div>
-        <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chart}>
-              <XAxis dataKey="name" tickLine={false} axisLine={false} />
-              <YAxis tickLine={false} axisLine={false} />
-              <Tooltip />
-              <Line dataKey="percentual" stroke="#b91c1c" strokeWidth={3} dot={{ r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+      </section>
+
+      <section className="card p-5">
+        <h2 className="text-lg font-black">Histórico de simulados</h2>
         <div className="mt-4 grid gap-2">
-          {items.slice(0, 6).map((item) => (
-            <div key={item.id} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
-              <span><strong>{item.examName}</strong><span className="block text-slate-500">{item.materia}</span></span>
+          {items.slice(0, 12).map((item) => (
+            <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
+              <span><strong>{item.examName || "Simulado"}</strong><span className="block text-slate-500">{item.materia} · {new Date(item.data).toLocaleDateString("pt-BR")}</span></span>
               <strong>{item.percentual}%</strong>
             </div>
           ))}
           {!items.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhum simulado registrado ainda.</div>}
         </div>
-      </article>
+      </section>
     </div>
   );
 }
