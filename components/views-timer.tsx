@@ -4,14 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Clock3, Pause, Play } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
+import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { areas, todayISO } from "@/utils/schedule";
 
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
-
-type ActiveTimer = {
-  area: string;
-  startedAt: number;
-};
 
 const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
 
@@ -31,7 +27,8 @@ function formatHours(value: number) {
 }
 
 export function TimerView() {
-  const [active, setActive] = useState<ActiveTimer | null>(null);
+  const active = useMedboardStore((state) => state.activeTimer);
+  const setActive = useMedboardStore((state) => state.setActiveTimer);
   const [now, setNow] = useState(Date.now());
   const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [saving, setSaving] = useState(false);

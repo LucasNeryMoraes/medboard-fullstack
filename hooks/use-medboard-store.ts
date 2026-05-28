@@ -8,6 +8,7 @@ type Board = Record<string, Record<string, string>>;
 export type LessonQuestionState = Record<string, { done: boolean; feitas: number; acertos: number; erros: number; observacoes: string }>;
 export type ExtraStudy = { id: string; titulo: string; materia: string; data: string; horas: number };
 export type ReviewTarget = { source: "error-note" | "flashcard"; sourceId: string; materia?: string | null; taskId?: string; externalId?: string | null } | null;
+export type ActiveStudyTimer = { area: string; startedAt: number } | null;
 
 type MedboardState = {
   tab: TabKey;
@@ -20,9 +21,11 @@ type MedboardState = {
   lessonQuestions: LessonQuestionState;
   extraStudies: ExtraStudy[];
   reviewTarget: ReviewTarget;
+  activeTimer: ActiveStudyTimer;
   onboardingDone: boolean;
   setTab: (tab: TabKey) => void;
   setReviewTarget: (target: ReviewTarget) => void;
+  setActiveTimer: (timer: ActiveStudyTimer) => void;
   setFilter: (key: "search" | "week" | "discipline" | "type", value: string) => void;
   toggleDone: (id: string) => void;
   setDoneIds: (ids: string[]) => void;
@@ -53,9 +56,11 @@ export const useMedboardStore = create<MedboardState>()(
       lessonQuestions: {},
       extraStudies: [],
       reviewTarget: null,
+      activeTimer: null,
       onboardingDone: false,
       setTab: (tab) => set({ tab }),
       setReviewTarget: (reviewTarget) => set({ reviewTarget }),
+      setActiveTimer: (activeTimer) => set({ activeTimer }),
       setFilter: (key, value) => set({ [key]: value }),
       toggleDone: (id) =>
         set((state) => ({
