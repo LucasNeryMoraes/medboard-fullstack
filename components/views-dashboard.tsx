@@ -2,38 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { AlertTriangle, CalendarCheck2, Clock3, Save, Target } from "lucide-react";
-import { toast } from "sonner";
+import { AlertTriangle, CalendarCheck2, Clock3, Target } from "lucide-react";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
 import { allLessons, allProgressIds, areas, parseISODate, schedule, todayISO } from "@/utils/schedule";
 
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
-type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null; rendimento?: number };
 type ErrorNote = { id: string; tema: string; materia: string | null };
 type Flashcard = { id: string; pergunta: string; tag: string | null; materia: string | null; deck: string | null; acertos: number; erros: number };
 
-const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
 const colors = ["#b91c1c", "#d946ef", "#7c3aed", "#0f766e", "#f59e0b"];
-
-function clockToHours(value: string) {
-  const [hours = "0", minutes = "0"] = value.split(":");
-  return Number(hours) + Number(minutes) / 60;
-}
-
-function hoursToClock(value: number) {
-  const totalMinutes = Math.round(Number(value || 0) * 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
-}
-
-function formatHours(value: number) {
-  const totalMinutes = Math.round(Number(value || 0) * 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes ? `${hours}h${String(minutes).padStart(2, "0")}` : `${hours}h`;
-}
 
 export function DashboardView() {
   const doneIds = useMedboardStore((state) => state.doneIds);
@@ -41,31 +19,22 @@ export function DashboardView() {
   const ids = useMemo(() => allProgressIds(), []);
   const lessons = useMemo(() => allLessons(), []);
   const [lessonQuestionRecords, setLessonQuestionRecords] = useState<LessonQuestionRecord[]>([]);
-  const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [errors, setErrors] = useState<ErrorNote[]>([]);
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
-  const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], horas: "", observacoes: "" });
-  const [editingHours, setEditingHours] = useState<Record<string, string>>({});
-  const [editingArea, setEditingArea] = useState<Record<string, string>>({});
 
   useEffect(() => {
     Promise.all([
       api<LessonQuestionRecord[]>("/api/lesson-questions"),
-      api<Productivity[]>("/api/productivity"),
       api<ErrorNote[]>("/api/errors"),
       api<Flashcard[]>("/api/flashcards")
     ])
-      .then(([questionItems, productivityItems, errorItems, cardItems]) => {
+      .then(([questionItems, errorItems, cardItems]) => {
         setLessonQuestionRecords(questionItems);
-        setProductivity(productivityItems);
         setErrors(errorItems);
         setFlashcards(cardItems);
-        setEditingHours(Object.fromEntries(productivityItems.map((item) => [item.id, hoursToClock(item.horas)])));
-        setEditingArea(Object.fromEntries(productivityItems.map((item) => [item.id, item.materia || areas[0]])));
       })
       .catch(() => {
         setLessonQuestionRecords([]);
-        setProductivity([]);
         setErrors([]);
         setFlashcards([]);
       });
@@ -145,47 +114,12 @@ export function DashboardView() {
     return Object.entries(ranking).sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [errors, flashcards]);
 
-  const hoursTotal = productivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const activeDays = new Set(productivity.map((item) => compactDate(item.data))).size;
-  const hoursByArea = areas.map((area) => ({
-    area,
-    horas: productivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0)
-  })).filter((item) => item.horas > 0);
-
   const cards = [
     { label: "Progresso total", value: `${progress}%`, icon: Target, detail: `${doneIds.length} de ${ids.length} itens` },
     { label: "Aulas atrasadas", value: overdue.length, icon: AlertTriangle, detail: "pendentes até hoje" },
     { label: "Dias do cronograma", value: schedule.stats.totalDias, icon: CalendarCheck2, detail: `${schedule.stats.inicio} até ${schedule.stats.fim}` },
     { label: "Revisões planejadas", value: schedule.stats.totalRevisoes, icon: Clock3, detail: "15 e 30 dias" }
   ];
-
-  async function addHours() {
-    if (!hoursForm.horas) {
-      toast.error("Informe as horas estudadas.");
-      return;
-    }
-    const saved = await api<Productivity>("/api/productivity", {
-      method: "POST",
-      body: JSON.stringify({ ...hoursForm, horas: clockToHours(hoursForm.horas), rendimento: 100 })
-    });
-    setProductivity((current) => [saved, ...current]);
-    setEditingHours((current) => ({ ...current, [saved.id]: hoursToClock(saved.horas) }));
-    setEditingArea((current) => ({ ...current, [saved.id]: saved.materia || hoursForm.materia }));
-    setHoursForm((current) => ({ ...current, horas: "", observacoes: "" }));
-    toast.success("Horas registradas");
-  }
-
-  async function saveHours(item: Productivity) {
-    const value = editingHours[item.id];
-    if (!value) return;
-    const updated = await api<Productivity>(`/api/productivity/${item.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ horas: clockToHours(value), materia: editingArea[item.id] || item.materia || areas[0] })
-    });
-    setProductivity((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
-    setEditingArea((current) => ({ ...current, [updated.id]: updated.materia || areas[0] }));
-    toast.success("Registro atualizado");
-  }
 
   return (
     <div className="grid gap-6">
@@ -276,53 +210,13 @@ export function DashboardView() {
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-2">
-        <article className="card min-h-80 p-5">
-          <h2 className="text-lg font-black">Ranking de assuntos mais errados</h2>
-          <p className="mt-1 text-sm text-slate-500">Considera erros salvos no caderno e flashcards marcados como difíceis.</p>
-          <div className="mt-6 grid gap-2">
-            {wrongRanking.map(([topic, count]) => <Row key={topic} left={topic} right={`${count} erro(s)`} />)}
-            {!wrongRanking.length && <Empty text="O ranking será criado automaticamente a partir do caderno de erros e flashcards." />}
-          </div>
-        </article>
-
-        <article className="card p-5">
-          <h2 className="text-lg font-black">Horas estudadas por matéria</h2>
-          <p className="mt-1 text-sm text-slate-500">Registros manuais e do cronômetro entram aqui. Você pode corrigir qualquer lançamento.</p>
-          <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-3 dark:border-violet-400/20 dark:bg-violet-500/10">
-            <div className="grid gap-3 md:grid-cols-3">
-              <input className="input" type="date" value={hoursForm.data} onChange={(e) => setHoursForm({ ...hoursForm, data: e.target.value })} />
-              <select className="input" value={hoursForm.materia} onChange={(e) => setHoursForm({ ...hoursForm, materia: e.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
-              <input className="input" type="time" value={hoursForm.horas} onChange={(e) => setHoursForm({ ...hoursForm, horas: e.target.value })} />
-            </div>
-            <input className="input mt-3" placeholder="Observação opcional. Ex.: aula de HAS + 20 questões" value={hoursForm.observacoes} onChange={(e) => setHoursForm({ ...hoursForm, observacoes: e.target.value })} />
-            <button className="btn-primary mt-3 w-full bg-red-700 hover:bg-red-800" onClick={addHours}>Adicionar horas estudadas</button>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <Metric title="Horas totais" value={formatHours(hoursTotal)} />
-            <Metric title="Dias ativos" value={activeDays} />
-            <Metric title="Média por dia ativo" value={formatHours(activeDays ? hoursTotal / activeDays : 0)} />
-          </div>
-          <h3 className="mt-5 text-sm font-black">Distribuição por matéria</h3>
-          <div className="mt-3 grid gap-2">
-            {hoursByArea.map((item) => <Row key={item.area} left={item.area} right={formatHours(item.horas)} />)}
-            {!hoursByArea.length && <Empty text="Ainda não há horas registradas por matéria." />}
-          </div>
-          <h3 className="mt-5 text-sm font-black">Últimos registros editáveis</h3>
-          <div className="mt-3 grid gap-2">
-            {productivity.slice(0, 8).map((item) => (
-              <div key={item.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800 md:grid-cols-[1fr_auto_auto_auto] md:items-center">
-                <span><strong>{compactDate(item.data)} · {item.materia || "Sem matéria"}</strong><span className="block text-slate-500">{item.observacoes || "Sem observação"}</span></span>
-                <select className="input h-10 md:w-48" value={editingArea[item.id] || item.materia || areas[0]} onChange={(event) => setEditingArea((current) => ({ ...current, [item.id]: event.target.value }))}>
-                  {areas.map((area) => <option key={area}>{area}</option>)}
-                </select>
-                <input className="input h-10 md:w-32" type="time" value={editingHours[item.id] || hoursToClock(item.horas)} onChange={(event) => setEditingHours((current) => ({ ...current, [item.id]: event.target.value }))} />
-                <button className="btn-secondary h-10" onClick={() => saveHours(item)}><Save size={16} /> Salvar</button>
-              </div>
-            ))}
-            {!productivity.length && <Empty text="Nenhum registro manual ainda. Adicione suas horas acima ou use o cronômetro." />}
-          </div>
-        </article>
+      <section className="card min-h-80 p-5">
+        <h2 className="text-lg font-black">Ranking de assuntos mais errados</h2>
+        <p className="mt-1 text-sm text-slate-500">Considera erros salvos no caderno e flashcards marcados como difíceis.</p>
+        <div className="mt-6 grid gap-2">
+          {wrongRanking.map(([topic, count]) => <Row key={topic} left={topic} right={`${count} erro(s)`} />)}
+          {!wrongRanking.length && <Empty text="O ranking será criado automaticamente a partir do caderno de erros e flashcards." />}
+        </div>
       </section>
     </div>
   );

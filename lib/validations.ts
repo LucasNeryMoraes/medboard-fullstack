@@ -55,13 +55,13 @@ export const flashcardSchema = z.object({
 });
 
 export const timerSchema = z.object({
-  tempo: z.coerce.number().int().min(60),
+  tempo: z.coerce.number().int().min(1),
   materia: z.string().optional().nullable(),
   data: z.coerce.date().optional()
 });
 
 export const productivitySchema = z.object({
-  horas: z.coerce.number().min(0.1),
+  horas: z.coerce.number().min(0.001),
   rendimento: z.coerce.number().int().min(0).max(100),
   observacoes: z.string().optional().nullable(),
   materia: z.string().optional().nullable(),

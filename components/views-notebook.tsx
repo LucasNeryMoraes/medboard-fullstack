@@ -451,33 +451,7 @@ export function NotebookView() {
         )}
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-2">
-        <StudyCard
-          title="Revisar caderno de erros"
-          area={noteArea}
-          setArea={setNoteArea}
-          mode={noteMode}
-          setMode={setNoteMode}
-          modes={["Revisões de hoje/atrasadas", "Todos os erros"]}
-          onShuffle={startNoteSession}
-          current={currentNote}
-          index={noteIndex}
-          total={noteSession.length}
-          showAnswer={showNoteAnswer}
-          setShowAnswer={setShowNoteAnswer}
-          question={currentNote?.erro}
-          answer={currentNote ? `${currentNote.resposta || "Sem resposta registrada."}${currentNote.revisao ? `\n\nPor que errei: ${currentNote.revisao}` : ""}` : ""}
-          image={currentNote?.imagem || ""}
-          onPrevious={previousNote}
-          onNext={nextNote}
-          disablePrevious={noteIndex === 0}
-          disableNext={noteIndex >= noteSession.length - 1}
-          onDelete={currentNote ? () => removeNote(currentNote.id) : undefined}
-          onMakeFlashcard={prepareFlashcardFromCurrentNote}
-          onRate={rateNote}
-          empty="Escolha uma matéria e clique em Embaralhar para revisar seus erros."
-        />
-
+      <section className="grid gap-6">
         <StudyCard
           title="Revisar flashcards"
           area={flashArea}
