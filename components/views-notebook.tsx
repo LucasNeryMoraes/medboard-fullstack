@@ -123,6 +123,7 @@ export function NotebookView() {
   const currentNote = noteSession[noteIndex];
   const currentFlashcard = flashSession[flashIndex];
   const currentSimQuestion = simSession[simIndex];
+  const simulationPool = useMemo(() => notes.filter((note) => note.erro.trim() && simAreas.length > 0 && note.materia && simAreas.includes(note.materia)), [notes, simAreas]);
 
   useEffect(() => {
     if (!reviewTarget) return;
@@ -281,13 +282,16 @@ export function NotebookView() {
   }
 
   function startErrorSimulation() {
+    if (!simAreas.length) {
+      toast.error("Selecione pelo menos uma matéria para montar o simulado.");
+      return;
+    }
     const quantity = Math.max(1, Number(simQuantity || 1));
-    const filtered = notes.filter((note) => !simAreas.length || (note.materia && simAreas.includes(note.materia)));
-    const selected = shuffle(filtered).slice(0, quantity);
+    const selected = shuffle(simulationPool).slice(0, Math.min(quantity, simulationPool.length));
     setSimSession(selected);
     setSimIndex(0);
     setShowSimAnswer(false);
-    if (!selected.length) toast.error("Nenhuma questão errada encontrada para essa seleção.");
+    if (!selected.length) toast.error("Nenhuma questão errada cadastrada para essa seleção.");
   }
 
   function nextSimQuestion() {
@@ -410,7 +414,8 @@ export function NotebookView() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-xl font-black">Simulado do caderno de erros</h2>
-            <p className="mt-1 text-sm text-slate-500">Monte uma prova somente com questões que você errou anteriormente.</p>
+            <p className="mt-1 text-sm text-slate-500">O simulado é montado somente a partir das questões salvas em Caderno de erros.</p>
+            <p className="mt-2 text-sm font-bold text-slate-500">{simulationPool.length} questão(ões) errada(s) disponíveis na seleção atual.</p>
           </div>
           <div className="flex gap-2">
             <input className="input w-36" type="number" min="1" value={simQuantity} onChange={(event) => setSimQuantity(event.target.value)} />
@@ -418,6 +423,8 @@ export function NotebookView() {
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
+          <button className="btn-secondary rounded-full px-3 py-2 text-sm font-bold" onClick={() => setSimAreas(areas)}>Todas</button>
+          <button className="btn-secondary rounded-full px-3 py-2 text-sm font-bold" onClick={() => setSimAreas([])}>Limpar</button>
           {areas.map((area) => (
             <button key={area} className={`rounded-full px-3 py-2 text-sm font-bold ${simAreas.includes(area) ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : "btn-secondary"}`} onClick={() => toggleSimArea(area)}>
               {area}

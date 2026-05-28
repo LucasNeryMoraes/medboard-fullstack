@@ -46,6 +46,7 @@ export function DashboardView() {
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], horas: "", observacoes: "" });
   const [editingHours, setEditingHours] = useState<Record<string, string>>({});
+  const [editingArea, setEditingArea] = useState<Record<string, string>>({});
 
   useEffect(() => {
     Promise.all([
@@ -60,6 +61,7 @@ export function DashboardView() {
         setErrors(errorItems);
         setFlashcards(cardItems);
         setEditingHours(Object.fromEntries(productivityItems.map((item) => [item.id, hoursToClock(item.horas)])));
+        setEditingArea(Object.fromEntries(productivityItems.map((item) => [item.id, item.materia || areas[0]])));
       })
       .catch(() => {
         setLessonQuestionRecords([]);
@@ -168,6 +170,7 @@ export function DashboardView() {
     });
     setProductivity((current) => [saved, ...current]);
     setEditingHours((current) => ({ ...current, [saved.id]: hoursToClock(saved.horas) }));
+    setEditingArea((current) => ({ ...current, [saved.id]: saved.materia || hoursForm.materia }));
     setHoursForm((current) => ({ ...current, horas: "", observacoes: "" }));
     toast.success("Horas registradas");
   }
@@ -177,10 +180,11 @@ export function DashboardView() {
     if (!value) return;
     const updated = await api<Productivity>(`/api/productivity/${item.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ horas: clockToHours(value) })
+      body: JSON.stringify({ horas: clockToHours(value), materia: editingArea[item.id] || item.materia || areas[0] })
     });
     setProductivity((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
-    toast.success("Horas atualizadas");
+    setEditingArea((current) => ({ ...current, [updated.id]: updated.materia || areas[0] }));
+    toast.success("Registro atualizado");
   }
 
   return (
@@ -307,8 +311,11 @@ export function DashboardView() {
           <h3 className="mt-5 text-sm font-black">Últimos registros editáveis</h3>
           <div className="mt-3 grid gap-2">
             {productivity.slice(0, 8).map((item) => (
-              <div key={item.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800 md:grid-cols-[1fr_auto_auto] md:items-center">
+              <div key={item.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800 md:grid-cols-[1fr_auto_auto_auto] md:items-center">
                 <span><strong>{compactDate(item.data)} · {item.materia || "Sem matéria"}</strong><span className="block text-slate-500">{item.observacoes || "Sem observação"}</span></span>
+                <select className="input h-10 md:w-48" value={editingArea[item.id] || item.materia || areas[0]} onChange={(event) => setEditingArea((current) => ({ ...current, [item.id]: event.target.value }))}>
+                  {areas.map((area) => <option key={area}>{area}</option>)}
+                </select>
                 <input className="input h-10 md:w-32" type="time" value={editingHours[item.id] || hoursToClock(item.horas)} onChange={(event) => setEditingHours((current) => ({ ...current, [item.id]: event.target.value }))} />
                 <button className="btn-secondary h-10" onClick={() => saveHours(item)}><Save size={16} /> Salvar</button>
               </div>
