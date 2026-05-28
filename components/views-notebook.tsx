@@ -30,6 +30,8 @@ type Flashcard = {
   tag: string | null;
   imagem: string | null;
   dueDate: string;
+  acertos: number;
+  erros: number;
   createdAt: string;
 };
 
@@ -93,6 +95,11 @@ export function NotebookView() {
   const [flashSession, setFlashSession] = useState<Flashcard[]>([]);
   const [flashIndex, setFlashIndex] = useState(0);
   const [showFlashAnswer, setShowFlashAnswer] = useState(false);
+  const [simAreas, setSimAreas] = useState<string[]>(areas);
+  const [simQuantity, setSimQuantity] = useState("10");
+  const [simSession, setSimSession] = useState<Note[]>([]);
+  const [simIndex, setSimIndex] = useState(0);
+  const [showSimAnswer, setShowSimAnswer] = useState(false);
 
   useEffect(() => {
     Promise.all([api<Note[]>("/api/errors"), api<Flashcard[]>("/api/flashcards")])
@@ -115,6 +122,7 @@ export function NotebookView() {
 
   const currentNote = noteSession[noteIndex];
   const currentFlashcard = flashSession[flashIndex];
+  const currentSimQuestion = simSession[simIndex];
 
   useEffect(() => {
     if (!reviewTarget) return;
@@ -268,6 +276,25 @@ export function NotebookView() {
     if (!filtered.length) toast.error("Nenhum flashcard encontrado para essa seleção.");
   }
 
+  function toggleSimArea(area: string) {
+    setSimAreas((current) => current.includes(area) ? current.filter((item) => item !== area) : [...current, area]);
+  }
+
+  function startErrorSimulation() {
+    const quantity = Math.max(1, Number(simQuantity || 1));
+    const filtered = notes.filter((note) => !simAreas.length || (note.materia && simAreas.includes(note.materia)));
+    const selected = shuffle(filtered).slice(0, quantity);
+    setSimSession(selected);
+    setSimIndex(0);
+    setShowSimAnswer(false);
+    if (!selected.length) toast.error("Nenhuma questão errada encontrada para essa seleção.");
+  }
+
+  function nextSimQuestion() {
+    setShowSimAnswer(false);
+    setSimIndex((current) => Math.min(current + 1, Math.max(simSession.length - 1, 0)));
+  }
+
   function nextNote() {
     setShowNoteAnswer(false);
     setNoteIndex((current) => Math.min(current + 1, Math.max(noteSession.length - 1, 0)));
@@ -295,40 +322,30 @@ export function NotebookView() {
       method: "PATCH",
       body: JSON.stringify({ data: date, dificuldade: label })
     });
-    await createScheduleReview({
-      id: currentNote.id,
-      title: currentNote.tema || currentNote.erro.slice(0, 80),
-      materia: currentNote.materia,
-      date,
-      source: "error-note",
-      difficulty: label
-    });
     await completeOpenedReminder("error-note", currentNote.id);
     setNotes((current) => current.map((note) => note.id === updated.id ? updated : note));
     setNoteSession((current) => current.map((note) => note.id === updated.id ? updated : note));
-    toast.success("Revisão adicionada ao cronograma");
+    toast.success("Erro atualizado no caderno");
     nextNote();
   }
 
   async function rateFlashcard(label: string, days: number) {
     if (!currentFlashcard) return;
     const date = nextDate(days);
+    const isHit = label === "Médio" || label === "Fácil";
     const updated = await api<Flashcard>(`/api/flashcards/${currentFlashcard.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ dueDate: date })
-    });
-    await createScheduleReview({
-      id: currentFlashcard.id,
-      title: currentFlashcard.tag || currentFlashcard.pergunta.slice(0, 80),
-      materia: currentFlashcard.materia || currentFlashcard.deck,
-      date,
-      source: "flashcard",
-      difficulty: label
+      body: JSON.stringify({
+        dueDate: date,
+        lastDifficulty: label,
+        acertos: Number(currentFlashcard.acertos || 0) + (isHit ? 1 : 0),
+        erros: Number(currentFlashcard.erros || 0) + (isHit ? 0 : 1)
+      })
     });
     await completeOpenedReminder("flashcard", currentFlashcard.id);
     setFlashcards((current) => current.map((card) => card.id === updated.id ? updated : card));
     setFlashSession((current) => current.map((card) => card.id === updated.id ? updated : card));
-    toast.success("Flashcard adicionado ao cronograma");
+    toast.success("Flashcard atualizado");
     nextFlashcard();
   }
 
@@ -387,6 +404,44 @@ export function NotebookView() {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-black">Simulado do caderno de erros</h2>
+            <p className="mt-1 text-sm text-slate-500">Monte uma prova somente com questões que você errou anteriormente.</p>
+          </div>
+          <div className="flex gap-2">
+            <input className="input w-36" type="number" min="1" value={simQuantity} onChange={(event) => setSimQuantity(event.target.value)} />
+            <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={startErrorSimulation}>Iniciar simulado</button>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {areas.map((area) => (
+            <button key={area} className={`rounded-full px-3 py-2 text-sm font-bold ${simAreas.includes(area) ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : "btn-secondary"}`} onClick={() => toggleSimArea(area)}>
+              {area}
+            </button>
+          ))}
+        </div>
+        {currentSimQuestion ? (
+          <div className="mt-5 grid gap-3">
+            <div className="flex items-center justify-between text-sm font-black">
+              <span>{simIndex + 1} de {simSession.length} · {currentSimQuestion.materia || "Sem matéria"}</span>
+              <span>{currentSimQuestion.tema}</span>
+            </div>
+            <div className="grid min-h-48 content-center rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-6 dark:border-fuchsia-400/30 dark:from-violet-500/10 dark:to-fuchsia-500/10">
+              <span className="text-xs font-black uppercase tracking-wider text-fuchsia-600">{showSimAnswer ? "Resposta e explicação" : "Questão errada"}</span>
+              <p className="mt-4 whitespace-pre-wrap text-base font-black text-violet-950 dark:text-violet-50">{showSimAnswer ? `${currentSimQuestion.resposta || "Sem resposta registrada."}${currentSimQuestion.revisao ? `\n\nPor que errei: ${currentSimQuestion.revisao}` : ""}` : currentSimQuestion.erro}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-secondary" onClick={() => setShowSimAnswer((value) => !value)}>{showSimAnswer ? "Ver questão" : "Revelar resposta"}</button>
+              <button className="btn-secondary" disabled={simIndex >= simSession.length - 1} onClick={nextSimQuestion}>Próxima</button>
+            </div>
+          </div>
+        ) : (
+          <Empty text="Escolha as matérias, a quantidade e inicie um simulado com suas questões erradas." />
+        )}
       </section>
 
       <section className="grid gap-6 xl:grid-cols-2">

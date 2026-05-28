@@ -48,11 +48,15 @@ export const flashcardSchema = z.object({
   deck: z.string().optional().nullable(),
   tag: z.string().optional().nullable(),
   imagem: z.string().optional().nullable(),
-  dueDate: z.coerce.date().optional()
+  dueDate: z.coerce.date().optional(),
+  acertos: z.coerce.number().int().min(0).optional(),
+  erros: z.coerce.number().int().min(0).optional(),
+  lastDifficulty: z.string().optional().nullable()
 });
 
 export const timerSchema = z.object({
   tempo: z.coerce.number().int().min(60),
+  materia: z.string().optional().nullable(),
   data: z.coerce.date().optional()
 });
 

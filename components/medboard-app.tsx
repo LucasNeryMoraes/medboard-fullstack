@@ -1,25 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { signOut } from "next-auth/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTheme } from "next-themes";
-import { BarChart3, BookOpenCheck, CalendarDays, Download, FileSpreadsheet, LogOut, Moon, NotebookTabs, Search, Sun, Timer, Trophy } from "lucide-react";
-import { toast } from "sonner";
-import * as XLSX from "xlsx";
-import jsPDF from "jspdf";
+import { BarChart3, CalendarDays, Clock3, LogOut, Moon, NotebookTabs, Search, Sun, Trophy } from "lucide-react";
 import { DashboardView } from "@/components/views-dashboard";
 import { ScheduleView } from "@/components/views-schedule";
+import { TimerView } from "@/components/views-timer";
 import { NotebookView } from "@/components/views-notebook";
 import { PerformanceView } from "@/components/views-performance";
 import { Onboarding } from "@/components/onboarding";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
-import { allProgressIds, schedule } from "@/utils/schedule";
+import { allProgressIds } from "@/utils/schedule";
 import type { TabKey } from "@/types/schedule";
 
 const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: "dashboard", label: "Dashboard", icon: BarChart3 },
   { key: "cronograma", label: "Cronograma", icon: CalendarDays },
+  { key: "cronometro", label: "Cronômetro", icon: Clock3 },
   { key: "simulados", label: "Simulados", icon: Trophy },
   { key: "caderno", label: "Caderno", icon: NotebookTabs }
 ];
@@ -27,42 +26,8 @@ const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
 export function MedboardApp({ userName }: { userName: string }) {
   const { theme, setTheme } = useTheme();
   const { tab, setTab, doneIds, onboardingDone } = useMedboardStore();
-  const [syncState, setSyncState] = useState<"idle" | "syncing" | "done">("idle");
   const ids = useMemo(() => allProgressIds(), []);
   const progress = ids.length ? Math.round((doneIds.length / ids.length) * 100) : 0;
-
-  function exportExcel() {
-    const rows = schedule.rows.flatMap((row) => [
-      ...row.aulas.map((aula) => ({ data: row.dataBR, semana: row.semana, tipo: "Aula", disciplina: aula.disciplina, titulo: aula.aula, status: doneIds.includes(aula.id) ? "Concluída" : "Pendente" })),
-      ...row.revisoesDoDia.map((rev) => ({ data: row.dataBR, semana: row.semana, tipo: "Revisão", disciplina: rev.disciplina, titulo: rev.aula, status: doneIds.includes(rev.id) ? "Concluída" : "Pendente" }))
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Cronograma");
-    XLSX.writeFile(wb, "cronograma-med.xlsx");
-    toast.success("Excel exportado");
-  }
-
-  function exportPDF() {
-    const pdf = new jsPDF();
-    pdf.setFontSize(18);
-    pdf.text("Cronograma Med - Resumo do cronograma", 14, 18);
-    pdf.setFontSize(11);
-    pdf.text(`Progresso: ${progress}%`, 14, 30);
-    schedule.rows.slice(0, 34).forEach((row, index) => {
-      pdf.text(`${row.dataBR} · ${row.semana} · ${row.assunto.slice(0, 80)}`, 14, 42 + index * 6);
-    });
-    pdf.save("cronograma-med-resumo.pdf");
-    toast.success("PDF exportado");
-  }
-
-  function fakeRealtimeSync() {
-    setSyncState("syncing");
-    setTimeout(() => {
-      setSyncState("done");
-      toast.success("Dados sincronizados");
-      setTimeout(() => setSyncState("idle"), 1600);
-    }, 650);
-  }
 
   return (
     <div className="min-h-screen">
@@ -98,12 +63,6 @@ export function MedboardApp({ userName }: { userName: string }) {
               <p className="text-sm font-semibold text-brand-600">Olá, {userName}</p>
               <h1 className="text-2xl font-black tracking-tight lg:text-3xl">Central de estudos Cronograma Med</h1>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button className="btn-secondary" onClick={fakeRealtimeSync}><Timer size={17} /> {syncState === "syncing" ? "Sincronizando..." : syncState === "done" ? "Sincronizado" : "Sync"}</button>
-              <button className="btn-secondary" onClick={exportPDF}><Download size={17} /> PDF</button>
-              <button className="btn-secondary" onClick={exportExcel}><FileSpreadsheet size={17} /> Excel</button>
-              <button className="btn-primary" onClick={() => setTab("cronograma")}><BookOpenCheck size={17} /> Estudar agora</button>
-            </div>
           </div>
           <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-white/10">
             <div className="h-full rounded-full bg-gradient-to-r from-brand-600 to-rose-500 transition-all" style={{ width: `${Math.max(progress, doneIds.length ? 1 : 0)}%` }} />
@@ -123,6 +82,7 @@ export function MedboardApp({ userName }: { userName: string }) {
             <motion.div key={tab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.18 }}>
               {tab === "dashboard" && <DashboardView />}
               {tab === "cronograma" && <ScheduleView />}
+              {tab === "cronometro" && <TimerView />}
               {tab === "simulados" && <PerformanceView />}
               {tab === "caderno" && <NotebookView />}
             </motion.div>

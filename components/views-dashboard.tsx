@@ -1,61 +1,76 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { AlertTriangle, CalendarCheck2, Clock3, Target } from "lucide-react";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { AlertTriangle, CalendarCheck2, Clock3, Save, Target } from "lucide-react";
 import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
 import { allLessons, allProgressIds, areas, parseISODate, schedule, todayISO } from "@/utils/schedule";
 
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
-type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
+type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null; rendimento?: number };
 type ErrorNote = { id: string; tema: string; materia: string | null };
+type Flashcard = { id: string; pergunta: string; tag: string | null; materia: string | null; deck: string | null; acertos: number; erros: number };
 
 const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
-const clockToHours = (value: string) => {
+const colors = ["#b91c1c", "#d946ef", "#7c3aed", "#0f766e", "#f59e0b"];
+
+function clockToHours(value: string) {
   const [hours = "0", minutes = "0"] = value.split(":");
   return Number(hours) + Number(minutes) / 60;
-};
-const formatHours = (value: number) => {
+}
+
+function hoursToClock(value: number) {
+  const totalMinutes = Math.round(Number(value || 0) * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function formatHours(value: number) {
   const totalMinutes = Math.round(Number(value || 0) * 60);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return minutes ? `${hours}h${String(minutes).padStart(2, "0")}` : `${hours}h`;
-};
+}
 
 export function DashboardView() {
   const doneIds = useMedboardStore((state) => state.doneIds);
   const storeQuestions = useMedboardStore((state) => state.lessonQuestions);
-  const setTab = useMedboardStore((state) => state.setTab);
   const ids = useMemo(() => allProgressIds(), []);
   const lessons = useMemo(() => allLessons(), []);
   const [lessonQuestionRecords, setLessonQuestionRecords] = useState<LessonQuestionRecord[]>([]);
   const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [errors, setErrors] = useState<ErrorNote[]>([]);
+  const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], horas: "", observacoes: "" });
+  const [editingHours, setEditingHours] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    Promise.all([api<LessonQuestionRecord[]>("/api/lesson-questions"), api<Productivity[]>("/api/productivity"), api<ErrorNote[]>("/api/errors")])
-      .then(([questionItems, productivityItems, errorItems]) => {
+    Promise.all([
+      api<LessonQuestionRecord[]>("/api/lesson-questions"),
+      api<Productivity[]>("/api/productivity"),
+      api<ErrorNote[]>("/api/errors"),
+      api<Flashcard[]>("/api/flashcards")
+    ])
+      .then(([questionItems, productivityItems, errorItems, cardItems]) => {
         setLessonQuestionRecords(questionItems);
         setProductivity(productivityItems);
         setErrors(errorItems);
+        setFlashcards(cardItems);
+        setEditingHours(Object.fromEntries(productivityItems.map((item) => [item.id, hoursToClock(item.horas)])));
       })
       .catch(() => {
         setLessonQuestionRecords([]);
         setProductivity([]);
         setErrors([]);
+        setFlashcards([]);
       });
   }, []);
 
   const overdue = lessons.filter((lesson) => parseISODate(lesson.data) < parseISODate(todayISO()) && !doneIds.includes(lesson.id));
   const progress = ids.length ? Math.round((doneIds.length / ids.length) * 100) : 0;
-  const areaData = areas.map((area) => {
-    const total = lessons.filter((lesson) => lesson.disciplina === area).length;
-    const done = lessons.filter((lesson) => lesson.disciplina === area && doneIds.includes(lesson.id)).length;
-    return { area: area.replace("Ginecologia e Obstetrícia", "GO").replace("Clínica Médica", "Clínica"), progresso: total ? Math.round((done / total) * 100) : 0 };
-  });
 
   const questionByLesson = useMemo(() => {
     const remote = Object.fromEntries(lessonQuestionRecords.map((item) => [item.lessonId, {
@@ -68,9 +83,8 @@ export function DashboardView() {
     return { ...remote, ...storeQuestions };
   }, [lessonQuestionRecords, storeQuestions]);
 
-  const questionsByArea = useMemo(() => areas.map((area) => {
-    const areaLessons = lessons.filter((lesson) => lesson.disciplina === area);
-    const stats = areaLessons.reduce((acc, lesson) => {
+  const performanceByArea = useMemo(() => areas.map((area) => {
+    const questionStats = lessons.filter((lesson) => lesson.disciplina === area).reduce((acc, lesson) => {
       const item = questionByLesson[lesson.id];
       if (!item) return acc;
       acc.acertos += Number(item.acertos || 0);
@@ -79,30 +93,55 @@ export function DashboardView() {
       if (item.done || item.feitas || item.acertos || item.erros) acc.aulas += 1;
       return acc;
     }, { acertos: 0, erros: 0, feitas: 0, aulas: 0 });
-    const respondidas = stats.acertos + stats.erros;
-    const percentual = respondidas ? Math.round((stats.acertos / respondidas) * 100) : 0;
-    const erroPercentual = respondidas ? Math.round((stats.erros / respondidas) * 100) : 0;
-    return { area, ...stats, respondidas, percentual, erroPercentual, totalAulas: areaLessons.length };
-  }), [lessons, questionByLesson]);
+    const cardStats = flashcards.filter((card) => card.materia === area || card.deck === area).reduce((acc, card) => {
+      acc.acertos += Number(card.acertos || 0);
+      acc.erros += Number(card.erros || 0);
+      return acc;
+    }, { acertos: 0, erros: 0 });
+    const acertos = questionStats.acertos + cardStats.acertos;
+    const erros = questionStats.erros + cardStats.erros;
+    const respondidas = acertos + erros;
+    const percentual = respondidas ? Math.round((acertos / respondidas) * 100) : 0;
+    const peso = respondidas ? Math.max(1, percentual) : 0;
+    return { area, ...questionStats, acertos, erros, respondidas, percentual, peso };
+  }), [flashcards, lessons, questionByLesson]);
+
+  const pieData = performanceByArea.filter((item) => item.peso > 0).map((item) => ({
+    name: item.area,
+    value: item.peso,
+    percentual: item.percentual,
+    acertos: item.acertos,
+    erros: item.erros
+  }));
 
   const questionTotals = useMemo(() => {
-    const acertos = questionsByArea.reduce((acc, item) => acc + item.acertos, 0);
-    const erros = questionsByArea.reduce((acc, item) => acc + item.erros, 0);
-    const feitas = questionsByArea.reduce((acc, item) => acc + item.feitas, 0);
-    const aulas = questionsByArea.reduce((acc, item) => acc + item.aulas, 0);
+    const acertos = performanceByArea.reduce((acc, item) => acc + item.acertos, 0);
+    const erros = performanceByArea.reduce((acc, item) => acc + item.erros, 0);
+    const feitas = performanceByArea.reduce((acc, item) => acc + item.feitas, 0);
+    const aulas = performanceByArea.reduce((acc, item) => acc + item.aulas, 0);
     const respondidas = acertos + erros;
     return { acertos, erros, feitas, aulas, respondidas, percentual: respondidas ? Math.round((acertos / respondidas) * 100) : 0 };
-  }, [questionsByArea]);
+  }, [performanceByArea]);
 
-  const rankedAreas = questionsByArea.filter((item) => item.respondidas > 0).sort((a, b) => b.percentual - a.percentual);
+  const rankedAreas = performanceByArea.filter((item) => item.respondidas > 0).sort((a, b) => b.percentual - a.percentual);
   const bestAreas = rankedAreas.slice(0, 3);
   const worstAreas = [...rankedAreas].sort((a, b) => a.percentual - b.percentual).slice(0, 3);
 
-  const wrongRanking = Object.entries(errors.reduce<Record<string, number>>((acc, item) => {
-    const key = `${item.tema}${item.materia ? ` · ${item.materia}` : ""}`;
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {})).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const wrongRanking = useMemo(() => {
+    const ranking: Record<string, number> = {};
+    errors.forEach((item) => {
+      const key = `${item.tema}${item.materia ? ` · ${item.materia}` : ""}`;
+      ranking[key] = (ranking[key] || 0) + 1;
+    });
+    flashcards.forEach((card) => {
+      const misses = Number(card.erros || 0);
+      if (!misses) return;
+      const topic = card.tag || card.pergunta.slice(0, 70);
+      const key = `${topic}${card.materia || card.deck ? ` · ${card.materia || card.deck}` : ""}`;
+      ranking[key] = (ranking[key] || 0) + misses;
+    });
+    return Object.entries(ranking).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  }, [errors, flashcards]);
 
   const hoursTotal = productivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
   const activeDays = new Set(productivity.map((item) => compactDate(item.data))).size;
@@ -113,9 +152,9 @@ export function DashboardView() {
 
   const cards = [
     { label: "Progresso total", value: `${progress}%`, icon: Target, detail: `${doneIds.length} de ${ids.length} itens` },
-    { label: "Aulas atrasadas", value: overdue.length, icon: AlertTriangle, detail: "pendentes ate hoje" },
-    { label: "Dias do cronograma", value: schedule.stats.totalDias, icon: CalendarCheck2, detail: `${schedule.stats.inicio} ate ${schedule.stats.fim}` },
-    { label: "Revisoes planejadas", value: schedule.stats.totalRevisoes, icon: Clock3, detail: "15 e 30 dias" }
+    { label: "Aulas atrasadas", value: overdue.length, icon: AlertTriangle, detail: "pendentes até hoje" },
+    { label: "Dias do cronograma", value: schedule.stats.totalDias, icon: CalendarCheck2, detail: `${schedule.stats.inicio} até ${schedule.stats.fim}` },
+    { label: "Revisões planejadas", value: schedule.stats.totalRevisoes, icon: Clock3, detail: "15 e 30 dias" }
   ];
 
   async function addHours() {
@@ -128,8 +167,20 @@ export function DashboardView() {
       body: JSON.stringify({ ...hoursForm, horas: clockToHours(hoursForm.horas), rendimento: 100 })
     });
     setProductivity((current) => [saved, ...current]);
+    setEditingHours((current) => ({ ...current, [saved.id]: hoursToClock(saved.horas) }));
     setHoursForm((current) => ({ ...current, horas: "", observacoes: "" }));
     toast.success("Horas registradas");
+  }
+
+  async function saveHours(item: Productivity) {
+    const value = editingHours[item.id];
+    if (!value) return;
+    const updated = await api<Productivity>(`/api/productivity/${item.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ horas: clockToHours(value) })
+    });
+    setProductivity((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+    toast.success("Horas atualizadas");
   }
 
   return (
@@ -149,20 +200,31 @@ export function DashboardView() {
 
       <section className="grid gap-6 xl:grid-cols-[1.4fr_.8fr]">
         <article className="card p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-black">Desempenho por área</h2>
-            <button className="btn-secondary" onClick={() => setTab("simulados")}>Registrar simulado</button>
-          </div>
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={areaData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="area" tickLine={false} axisLine={false} />
-                <YAxis tickLine={false} axisLine={false} />
-                <Tooltip />
-                <Bar dataKey="progresso" fill="#b91c1c" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <h2 className="text-lg font-black">Desempenho por área</h2>
+          <p className="mt-1 text-sm text-slate-500">Pizza ponderada por aproveitamento em questões do cronograma e flashcards. Quanto melhor a área, maior a fatia.</p>
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_.9fr]">
+            <div className="h-80">
+              {pieData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={70} outerRadius={120} paddingAngle={3}>
+                      {pieData.map((_, index) => <Cell key={index} fill={colors[index % colors.length]} />)}
+                    </Pie>
+                    <Tooltip formatter={(_, __, payload) => [`${payload.payload.percentual}% · ${payload.payload.acertos} acertos · ${payload.payload.erros} erros`, payload.payload.name]} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <Empty text="Preencha acertos/erros no cronograma ou revise flashcards para gerar o gráfico." />
+              )}
+            </div>
+            <div className="grid content-center gap-2">
+              {pieData.map((item, index) => (
+                <div key={item.name} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
+                  <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} />{item.name}</span>
+                  <strong>{item.percentual}%</strong>
+                </div>
+              ))}
+            </div>
           </div>
         </article>
 
@@ -175,14 +237,14 @@ export function DashboardView() {
                 <p className="text-slate-600 dark:text-slate-300">{lesson.aula}</p>
               </div>
             ))}
-            {!overdue.length && <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma aula atrasada pendente.</div>}
+            {!overdue.length && <Empty text="Nenhuma aula atrasada pendente." />}
           </div>
         </article>
       </section>
 
       <section className="card p-5">
         <h2 className="text-lg font-black">Controle automático de questões por grande área</h2>
-        <p className="mt-1 text-sm text-slate-500">Dados puxados automaticamente da aba Cronograma, a partir dos campos de questões, acertos e erros preenchidos em cada aula.</p>
+        <p className="mt-1 text-sm text-slate-500">Dados puxados automaticamente da aba Cronograma e das respostas dos flashcards.</p>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
           <Metric title="Questões registradas" value={questionTotals.feitas || questionTotals.respondidas} detail={`${questionTotals.aulas} aula(s) com questões`} />
           <Metric title="Acertos" value={questionTotals.acertos} detail={`${questionTotals.percentual}% de aproveitamento`} />
@@ -193,19 +255,17 @@ export function DashboardView() {
           <div>
             <h3 className="text-sm font-black">Resumo por grande área</h3>
             <div className="mt-3 grid gap-2">
-              {questionsByArea.map((item) => (
-                <AreaInsight key={item.area} item={item} />
-              ))}
+              {performanceByArea.map((item) => <AreaInsight key={item.area} item={item} />)}
             </div>
           </div>
           <div>
             <h3 className="text-sm font-black">Overview dos estudos</h3>
             <div className="mt-3 grid gap-3">
-              <InsightBox title="Melhor desempenho" items={bestAreas} empty="Preencha acertos e erros no cronograma para descobrir suas áreas mais fortes." tone="good" />
+              <InsightBox title="Melhor desempenho" items={bestAreas} empty="Preencha acertos e erros para descobrir suas áreas mais fortes." tone="good" />
               <InsightBox title="Precisa de mais revisão" items={worstAreas} empty="Ainda não há dados suficientes para apontar os pontos fracos." tone="risk" />
               <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 text-sm dark:border-violet-400/20 dark:bg-slate-900">
                 <strong>Leitura rápida</strong>
-                <p className="mt-1 text-slate-500">{questionTotals.respondidas ? `Você tem ${questionTotals.percentual}% de aproveitamento geral, com ${questionTotals.erros} erro(s) distribuídos nas matérias preenchidas no cronograma.` : "Assim que você preencher questões nas aulas do cronograma, este painel passa a mostrar seu aproveitamento por matéria automaticamente."}</p>
+                <p className="mt-1 text-slate-500">{questionTotals.respondidas ? `Você tem ${questionTotals.percentual}% de aproveitamento geral, com ${questionTotals.erros} erro(s) distribuídos nas matérias preenchidas.` : "Assim que você preencher questões ou flashcards, este painel passa a mostrar seu aproveitamento por matéria automaticamente."}</p>
               </div>
             </div>
           </div>
@@ -215,15 +275,16 @@ export function DashboardView() {
       <section className="grid gap-6 xl:grid-cols-2">
         <article className="card min-h-80 p-5">
           <h2 className="text-lg font-black">Ranking de assuntos mais errados</h2>
+          <p className="mt-1 text-sm text-slate-500">Considera erros salvos no caderno e flashcards marcados como difíceis.</p>
           <div className="mt-6 grid gap-2">
             {wrongRanking.map(([topic, count]) => <Row key={topic} left={topic} right={`${count} erro(s)`} />)}
-            {!wrongRanking.length && <Empty text="O ranking será criado automaticamente a partir do caderno de erros." />}
+            {!wrongRanking.length && <Empty text="O ranking será criado automaticamente a partir do caderno de erros e flashcards." />}
           </div>
         </article>
 
         <article className="card p-5">
           <h2 className="text-lg font-black">Horas estudadas por matéria</h2>
-          <p className="mt-1 text-sm text-slate-500">Registre manualmente quanto estudou em cada disciplina. O dashboard soma tudo por matéria e também usa esses registros para contar seus dias ativos.</p>
+          <p className="mt-1 text-sm text-slate-500">Registros manuais e do cronômetro entram aqui. Você pode corrigir qualquer lançamento.</p>
           <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-3 dark:border-violet-400/20 dark:bg-violet-500/10">
             <div className="grid gap-3 md:grid-cols-3">
               <input className="input" type="date" value={hoursForm.data} onChange={(e) => setHoursForm({ ...hoursForm, data: e.target.value })} />
@@ -243,10 +304,16 @@ export function DashboardView() {
             {hoursByArea.map((item) => <Row key={item.area} left={item.area} right={formatHours(item.horas)} />)}
             {!hoursByArea.length && <Empty text="Ainda não há horas registradas por matéria." />}
           </div>
-          <h3 className="mt-5 text-sm font-black">Últimos registros</h3>
+          <h3 className="mt-5 text-sm font-black">Últimos registros editáveis</h3>
           <div className="mt-3 grid gap-2">
-            {productivity.slice(0, 5).map((item) => <Row key={item.id} left={`${compactDate(item.data)} · ${item.materia || "Sem matéria"}`} right={formatHours(item.horas)} />)}
-            {!productivity.length && <Empty text="Nenhum registro manual ainda. Adicione suas horas acima." />}
+            {productivity.slice(0, 8).map((item) => (
+              <div key={item.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800 md:grid-cols-[1fr_auto_auto] md:items-center">
+                <span><strong>{compactDate(item.data)} · {item.materia || "Sem matéria"}</strong><span className="block text-slate-500">{item.observacoes || "Sem observação"}</span></span>
+                <input className="input h-10 md:w-32" type="time" value={editingHours[item.id] || hoursToClock(item.horas)} onChange={(event) => setEditingHours((current) => ({ ...current, [item.id]: event.target.value }))} />
+                <button className="btn-secondary h-10" onClick={() => saveHours(item)}><Save size={16} /> Salvar</button>
+              </div>
+            ))}
+            {!productivity.length && <Empty text="Nenhum registro manual ainda. Adicione suas horas acima ou use o cronômetro." />}
           </div>
         </article>
       </section>
@@ -264,7 +331,7 @@ function Metric({ title, value, detail }: { title: string; value: string | numbe
   );
 }
 
-function AreaInsight({ item }: { item: { area: string; acertos: number; erros: number; feitas: number; aulas: number; respondidas: number; percentual: number; erroPercentual: number } }) {
+function AreaInsight({ item }: { item: { area: string; acertos: number; erros: number; feitas: number; aulas: number; respondidas: number; percentual: number } }) {
   return (
     <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -275,7 +342,6 @@ function AreaInsight({ item }: { item: { area: string; acertos: number; erros: n
         <div className="h-full rounded-full bg-emerald-500" style={{ width: `${item.percentual}%` }} />
       </div>
       <p className="mt-2 text-sm text-slate-500">{item.acertos} acertos · {item.erros} erros · {item.aulas} aula(s) preenchidas</p>
-      {!!item.respondidas && <p className="mt-1 text-xs text-slate-400">{item.erroPercentual}% das respostas registradas viraram erro.</p>}
     </div>
   );
 }
