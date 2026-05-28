@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Clock3, Pause, Play, Save } from "lucide-react";
+import { Clock3, Pause, Play, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
@@ -144,8 +144,25 @@ export function TimerView() {
       body: JSON.stringify({ horas: clockToHours(value), materia: editingArea[item.id] || item.materia || areas[0] })
     });
     setProductivity((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+    setEditingHours((current) => ({ ...current, [updated.id]: hoursToClock(updated.horas) }));
     setEditingArea((current) => ({ ...current, [updated.id]: updated.materia || areas[0] }));
     toast.success("Registro atualizado");
+  }
+
+  async function deleteHours(item: Productivity) {
+    await api(`/api/productivity/${item.id}`, { method: "DELETE" });
+    setProductivity((current) => current.filter((entry) => entry.id !== item.id));
+    setEditingHours((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    setEditingArea((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    toast.success("Registro apagado");
   }
 
   return (
@@ -230,13 +247,14 @@ export function TimerView() {
         <h3 className="mt-5 text-sm font-black">Últimos registros editáveis</h3>
         <div className="mt-3 grid gap-2">
           {productivity.slice(0, 10).map((item) => (
-            <div key={item.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800 md:grid-cols-[1fr_auto_auto_auto] md:items-center">
+            <div key={item.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800 md:grid-cols-[1fr_auto_auto_auto_auto] md:items-center">
               <span><strong>{compactDate(item.data)} · {item.materia || "Sem matéria"}</strong><span className="block text-slate-500">{item.observacoes || "Sem observação"}</span></span>
               <select className="input h-10 md:w-48" value={editingArea[item.id] || item.materia || areas[0]} onChange={(event) => setEditingArea((current) => ({ ...current, [item.id]: event.target.value }))}>
                 {areas.map((area) => <option key={area}>{area}</option>)}
               </select>
               <input className="input h-10 md:w-32" type="time" value={editingHours[item.id] || hoursToClock(item.horas)} onChange={(event) => setEditingHours((current) => ({ ...current, [item.id]: event.target.value }))} />
               <button className="btn-secondary h-10" onClick={() => saveHours(item)}><Save size={16} /> Salvar</button>
+              <button className="btn-secondary h-10 px-3 text-red-700 dark:text-red-300" onClick={() => deleteHours(item)} title="Apagar registro"><Trash2 size={16} /></button>
             </div>
           ))}
           {!productivity.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400 dark:border-white/10">Nenhum registro ainda. Use o cronômetro ou adicione manualmente.</div>}
