@@ -1,17 +1,52 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { AlertTriangle, CalendarCheck2, Clock3, Target } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { AlertTriangle, BookOpenCheck, CalendarCheck2, Clock3, Flame, Layers3, NotebookTabs, Target } from "lucide-react";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
 import { allLessons, allProgressIds, areas, parseISODate, schedule, todayISO } from "@/utils/schedule";
 
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
-type ErrorNote = { id: string; tema: string; materia: string | null };
-type Flashcard = { id: string; pergunta: string; tag: string | null; materia: string | null; deck: string | null; acertos: number; erros: number };
+type ErrorNote = { id: string; tema: string; materia: string | null; erro: string; revisao: string | null; flashcard: string | null; dificuldade: string | null; data: string; createdAt: string };
+type Flashcard = { id: string; pergunta: string; tag: string | null; materia: string | null; deck: string | null; dueDate: string; updatedAt?: string; acertos: number; erros: number; lastDifficulty?: string | null };
+type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
+type Performance = { id: string; materia: string; acertos: number; erros: number; percentual: number; examName: string | null; data: string; createdAt: string };
 
-const colors = ["#b91c1c", "#d946ef", "#7c3aed", "#0f766e", "#f59e0b"];
+const today = todayISO();
+const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
+const monthKey = (value: string | Date) => compactDate(value).slice(0, 7);
+
+function formatHours(value: number) {
+  const totalMinutes = Math.round(Number(value || 0) * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes ? `${hours}h${String(minutes).padStart(2, "0")}` : `${hours}h`;
+}
+
+function startOfWeek(date = new Date()) {
+  const copy = new Date(date);
+  const day = copy.getDay() || 7;
+  copy.setDate(copy.getDate() - day + 1);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function inferSystem(text: string) {
+  const normalized = text.toLowerCase();
+  const entries: [string, string[]][] = [
+    ["Cardiologia", ["cardio", "has", "hipertens", "infarto", "arrit", "insuficiência cardíaca"]],
+    ["Pneumologia", ["pneumo", "asma", "dpoc", "pneumonia", "tubercul", "dispneia"]],
+    ["Endocrinologia", ["endo", "diabetes", "tireo", "adrenal", "obesidade"]],
+    ["Nefrologia", ["nefro", "renal", "rim", "ira", "drc", "glomer"]],
+    ["Gastroenterologia", ["gastro", "hepat", "cirrose", "diarreia", "úlcera", "refluxo"]],
+    ["Infectologia", ["infect", "hiv", "sepse", "antibiótico", "dengue"]],
+    ["Neurologia", ["neuro", "avc", "cefaleia", "convuls", "epilep"]],
+    ["Ginecologia", ["gineco", "gesta", "pré-natal", "obst", "parto"]],
+    ["Pediatria", ["pedi", "criança", "neonato", "vacina"]]
+  ];
+  return entries.find(([, words]) => words.some((word) => normalized.includes(word)))?.[0] || "Sem sistema definido";
+}
 
 export function DashboardView() {
   const doneIds = useMedboardStore((state) => state.doneIds);
@@ -21,27 +56,40 @@ export function DashboardView() {
   const [lessonQuestionRecords, setLessonQuestionRecords] = useState<LessonQuestionRecord[]>([]);
   const [errors, setErrors] = useState<ErrorNote[]>([]);
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
+  const [productivity, setProductivity] = useState<Productivity[]>([]);
+  const [performances, setPerformances] = useState<Performance[]>([]);
 
   useEffect(() => {
     Promise.all([
       api<LessonQuestionRecord[]>("/api/lesson-questions"),
       api<ErrorNote[]>("/api/errors"),
-      api<Flashcard[]>("/api/flashcards")
+      api<Flashcard[]>("/api/flashcards"),
+      api<Productivity[]>("/api/productivity"),
+      api<Performance[]>("/api/performance")
     ])
-      .then(([questionItems, errorItems, cardItems]) => {
+      .then(([questionItems, errorItems, cardItems, productivityItems, performanceItems]) => {
         setLessonQuestionRecords(questionItems);
         setErrors(errorItems);
         setFlashcards(cardItems);
+        setProductivity(productivityItems);
+        setPerformances(performanceItems);
       })
       .catch(() => {
         setLessonQuestionRecords([]);
         setErrors([]);
         setFlashcards([]);
+        setProductivity([]);
+        setPerformances([]);
       });
   }, []);
 
-  const overdue = lessons.filter((lesson) => parseISODate(lesson.data) < parseISODate(todayISO()) && !doneIds.includes(lesson.id));
-  const progress = ids.length ? Math.round((doneIds.length / ids.length) * 100) : 0;
+  const todayDate = parseISODate(today);
+  const weekStart = startOfWeek(todayDate);
+  const currentMonth = monthKey(today);
+  const daysRemaining = Math.max(0, Math.ceil((parseISODate(schedule.stats.fim).getTime() - todayDate.getTime()) / 86_400_000));
+  const overdueLessons = lessons.filter((lesson) => parseISODate(lesson.data) < todayDate && !doneIds.includes(lesson.id));
+  const overdueReviews = schedule.rows.flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, data: row.data, dataBR: row.dataBR }))).filter((review) => parseISODate(review.data) < todayDate && !doneIds.includes(review.id));
+  const scheduledExams = schedule.rows.filter((row) => row.tipo === "simulado" || row.revisoesDoDia.length === 0).filter((row) => parseISODate(row.data) >= todayDate && row.assunto.toLowerCase().includes("simulado")).slice(0, 4);
 
   const questionByLesson = useMemo(() => {
     const remote = Object.fromEntries(lessonQuestionRecords.map((item) => [item.lessonId, {
@@ -61,161 +109,287 @@ export function DashboardView() {
       acc.acertos += Number(item.acertos || 0);
       acc.erros += Number(item.erros || 0);
       acc.feitas += Math.max(Number(item.feitas || 0), Number(item.acertos || 0) + Number(item.erros || 0));
-      if (item.done || item.feitas || item.acertos || item.erros) acc.aulas += 1;
       return acc;
-    }, { acertos: 0, erros: 0, feitas: 0, aulas: 0 });
+    }, { acertos: 0, erros: 0, feitas: 0 });
+    const simStats = performances.filter((item) => item.materia === area).reduce((acc, item) => {
+      acc.acertos += item.acertos;
+      acc.erros += item.erros;
+      return acc;
+    }, { acertos: 0, erros: 0 });
     const cardStats = flashcards.filter((card) => card.materia === area || card.deck === area).reduce((acc, card) => {
       acc.acertos += Number(card.acertos || 0);
       acc.erros += Number(card.erros || 0);
       return acc;
     }, { acertos: 0, erros: 0 });
-    const acertos = questionStats.acertos + cardStats.acertos;
-    const erros = questionStats.erros + cardStats.erros;
-    const respondidas = acertos + erros;
-    const percentual = respondidas ? Math.round((acertos / respondidas) * 100) : 0;
-    const peso = respondidas ? Math.max(1, percentual) : 0;
-    return { area, ...questionStats, acertos, erros, respondidas, percentual, peso };
-  }), [flashcards, lessons, questionByLesson]);
+    const acertos = questionStats.acertos + simStats.acertos + cardStats.acertos;
+    const erros = questionStats.erros + simStats.erros + cardStats.erros;
+    const total = acertos + erros;
+    return { area, acertos, erros, total, feitas: questionStats.feitas, percentual: total ? Math.round((acertos / total) * 100) : 0 };
+  }), [flashcards, lessons, performances, questionByLesson]);
 
-  const pieData = performanceByArea.filter((item) => item.peso > 0).map((item) => ({
-    name: item.area,
-    value: item.peso,
-    percentual: item.percentual,
-    acertos: item.acertos,
-    erros: item.erros
+  const questionTotals = performanceByArea.reduce((acc, item) => ({
+    acertos: acc.acertos + item.acertos,
+    erros: acc.erros + item.erros,
+    feitas: acc.feitas + item.feitas,
+    total: acc.total + item.total
+  }), { acertos: 0, erros: 0, feitas: 0, total: 0 });
+  const generalAccuracy = questionTotals.total ? Math.round((questionTotals.acertos / questionTotals.total) * 100) : 0;
+  const rankedAreas = performanceByArea.filter((item) => item.total > 0).sort((a, b) => b.percentual - a.percentual);
+  const bestArea = rankedAreas[0];
+  const worstArea = [...rankedAreas].sort((a, b) => a.percentual - b.percentual)[0];
+
+  const hoursToday = productivity.filter((item) => compactDate(item.data) === today).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursWeek = productivity.filter((item) => new Date(item.data) >= weekStart).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursMonth = productivity.filter((item) => monthKey(item.data) === currentMonth).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursTotal = productivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursByArea = areas.map((area) => ({ area, hours: productivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0) })).sort((a, b) => b.hours - a.hours);
+  const hoursBySystem = Object.entries(productivity.reduce<Record<string, number>>((acc, item) => {
+    const system = inferSystem(`${item.observacoes || ""} ${item.materia || ""}`);
+    acc[system] = (acc[system] || 0) + Number(item.horas || 0);
+    return acc;
+  }, {})).map(([system, hours]) => ({ system, hours })).sort((a, b) => b.hours - a.hours).slice(0, 8);
+
+  const flashDue = flashcards.filter((card) => compactDate(card.dueDate) <= today);
+  const flashOverdue = flashcards.filter((card) => compactDate(card.dueDate) < today);
+  const flashReviewedToday = flashcards.filter((card) => card.updatedAt && compactDate(card.updatedAt) === today);
+  const flashHits = flashcards.reduce((acc, item) => acc + Number(item.acertos || 0), 0);
+  const flashMisses = flashcards.reduce((acc, item) => acc + Number(item.erros || 0), 0);
+  const difficultCards = flashcards.filter((card) => ["Muito difícil", "Difícil", "Muito difÃ­cil", "DifÃ­cil"].includes(card.lastDifficulty || "")).length;
+
+  const recurringErrors = Object.entries(errors.reduce<Record<string, number>>((acc, item) => {
+    const key = `${item.tema}${item.materia ? ` · ${item.materia}` : ""}`;
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {})).filter(([, count]) => count > 1);
+  const wrongRanking = Object.entries(errors.reduce<Record<string, number>>((acc, item) => {
+    const key = `${item.tema}${item.materia ? ` · ${item.materia}` : ""}`;
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const errorsWithoutFlashcard = errors.filter((item) => !item.flashcard && !item.revisao).length;
+  const resolvedErrors = errors.filter((item) => item.dificuldade === "Fácil" || item.dificuldade === "Dificuldade baixa").length;
+
+  const examsThisWeek = performances.filter((item) => new Date(item.data) >= weekStart);
+  const examsThisMonth = performances.filter((item) => monthKey(item.data) === currentMonth);
+  const examNames = new Set(performances.map((item) => item.examName || item.id));
+  const examAverage = performances.length ? Math.round(performances.reduce((acc, item) => acc + item.percentual, 0) / performances.length) : 0;
+
+  const activityByMonth = Array.from(new Set([...productivity.map((item) => monthKey(item.data)), ...performances.map((item) => monthKey(item.data))])).sort().slice(-6).map((month) => ({
+    month,
+    horas: Math.round(productivity.filter((item) => monthKey(item.data) === month).reduce((acc, item) => acc + Number(item.horas || 0), 0) * 10) / 10,
+    simulados: new Set(performances.filter((item) => monthKey(item.data) === month).map((item) => item.examName || item.id)).size,
+    questoes: lessonQuestionRecords.filter((item) => monthKey(new Date()) === month).reduce((acc, item) => acc + Math.max(item.feitas, item.acertos + item.erros), 0),
+    flashcards: flashcards.filter((item) => item.updatedAt && monthKey(item.updatedAt) === month).length
   }));
 
-  const questionTotals = useMemo(() => {
-    const acertos = performanceByArea.reduce((acc, item) => acc + item.acertos, 0);
-    const erros = performanceByArea.reduce((acc, item) => acc + item.erros, 0);
-    const feitas = performanceByArea.reduce((acc, item) => acc + item.feitas, 0);
-    const aulas = performanceByArea.reduce((acc, item) => acc + item.aulas, 0);
-    const respondidas = acertos + erros;
-    return { acertos, erros, feitas, aulas, respondidas, percentual: respondidas ? Math.round((acertos / respondidas) * 100) : 0 };
-  }, [performanceByArea]);
+  const heatmapDays = Array.from({ length: 84 }, (_, index) => {
+    const date = new Date(todayDate);
+    date.setDate(date.getDate() - (83 - index));
+    const key = compactDate(date);
+    const hours = productivity.filter((item) => compactDate(item.data) === key).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+    return { key, hours, level: hours >= 6 ? 4 : hours >= 4 ? 3 : hours >= 2 ? 2 : hours > 0 ? 1 : 0 };
+  });
 
-  const rankedAreas = performanceByArea.filter((item) => item.respondidas > 0).sort((a, b) => b.percentual - a.percentual);
-  const bestAreas = rankedAreas.slice(0, 3);
-  const worstAreas = [...rankedAreas].sort((a, b) => a.percentual - b.percentual).slice(0, 3);
+  const mostStudied = hoursByArea.find((item) => item.hours > 0);
+  const leastStudied = [...hoursByArea].reverse().find((item) => item.hours > 0);
+  const topSystem = hoursBySystem[0];
+  const neglectedSystem = [...hoursBySystem].reverse().find((item) => item.hours > 0);
 
-  const wrongRanking = useMemo(() => {
-    const ranking: Record<string, number> = {};
-    errors.forEach((item) => {
-      const key = `${item.tema}${item.materia ? ` · ${item.materia}` : ""}`;
-      ranking[key] = (ranking[key] || 0) + 1;
-    });
-    flashcards.forEach((card) => {
-      const misses = Number(card.erros || 0);
-      if (!misses) return;
-      const topic = card.tag || card.pergunta.slice(0, 70);
-      const key = `${topic}${card.materia || card.deck ? ` · ${card.materia || card.deck}` : ""}`;
-      ranking[key] = (ranking[key] || 0) + misses;
-    });
-    return Object.entries(ranking).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  }, [errors, flashcards]);
-
-  const cards = [
-    { label: "Progresso total", value: `${progress}%`, icon: Target, detail: `${doneIds.length} de ${ids.length} itens` },
-    { label: "Aulas atrasadas", value: overdue.length, icon: AlertTriangle, detail: "pendentes até hoje" },
-    { label: "Dias do cronograma", value: schedule.stats.totalDias, icon: CalendarCheck2, detail: `${schedule.stats.inicio} até ${schedule.stats.fim}` },
-    { label: "Revisões planejadas", value: schedule.stats.totalRevisoes, icon: Clock3, detail: "15 e 30 dias" }
+  const recommendations = [
+    { level: "red", text: `${flashOverdue.length} flashcards atrasados.`, active: flashOverdue.length > 0 },
+    { level: "red", text: `${overdueLessons.length} aulas atrasadas.`, active: overdueLessons.length > 0 },
+    { level: "red", text: `${overdueReviews.length} revisões atrasadas.`, active: overdueReviews.length > 0 },
+    { level: "yellow", text: `Seu pior desempenho atual é ${worstArea?.area} (${worstArea?.percentual}%).`, active: !!worstArea },
+    { level: "yellow", text: `${recurringErrors.length} assuntos recorrentes no caderno de erros.`, active: recurringErrors.length > 0 },
+    { level: "green", text: `Você estudou ${formatHours(hoursToday)} hoje.`, active: hoursToday > 0 }
   ];
+  const nextAction = recommendations.find((item) => item.active) || { level: "green", text: "Sem bloqueios críticos. Mantenha o cronograma de hoje.", active: true };
+
+  const compactCards = [
+    { label: "Progresso", value: `${ids.length ? Math.round((doneIds.length / ids.length) * 100) : 0}%`, detail: `${doneIds.length}/${ids.length}`, icon: Target },
+    { label: "Atrasadas", value: overdueLessons.length, detail: "aulas", icon: AlertTriangle },
+    { label: "Revisões", value: schedule.stats.totalRevisoes, detail: "planejadas", icon: CalendarCheck2 },
+    { label: "Dias restantes", value: daysRemaining, detail: "até o final", icon: Clock3 },
+    { label: "Horas", value: formatHours(hoursTotal), detail: "totais", icon: Flame },
+    { label: "Questões", value: questionTotals.feitas || questionTotals.total, detail: `${generalAccuracy}% acerto`, icon: BookOpenCheck },
+    { label: "Flashcards", value: flashcards.length, detail: `${flashDue.length} pendentes`, icon: Layers3 }
+  ];
+
+  const alerts = [
+    { tone: "red", text: `${flashOverdue.length} flashcards atrasados.`, active: flashOverdue.length > 0 },
+    { tone: "red", text: `${overdueLessons.length} aulas atrasadas.`, active: overdueLessons.length > 0 },
+    { tone: "yellow", text: `${scheduledExams.length} simulados programados próximos.`, active: scheduledExams.length > 0 },
+    { tone: "yellow", text: `${recurringErrors.length} erros recorrentes sem consolidação.`, active: recurringErrors.length > 0 },
+    { tone: "green", text: `Meta semanal quase concluída: ${formatHours(hoursWeek)} registrados.`, active: hoursWeek >= 20 }
+  ].filter((item) => item.active);
 
   return (
     <div className="grid gap-6">
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {cards.map((card) => (
-          <article className="card p-5" key={card.label}>
-            <div className="mb-4 flex items-center justify-between">
-              <span className="text-xs font-black uppercase tracking-wider text-slate-400">{card.label}</span>
-              <card.icon className="text-brand-600" size={20} />
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        {compactCards.map((card) => (
+          <article className="card p-4" key={card.label}>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">{card.label}</span>
+              <card.icon className="text-brand-600" size={17} />
             </div>
-            <strong className="text-3xl font-black tracking-tight">{card.value}</strong>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{card.detail}</p>
+            <strong className="block text-2xl font-black tracking-tight">{card.value}</strong>
+            <small className="text-slate-500">{card.detail}</small>
           </article>
         ))}
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[1.4fr_.8fr]">
+      <section className={`card border-l-4 p-5 ${nextAction.level === "red" ? "border-l-red-600" : nextAction.level === "yellow" ? "border-l-amber-500" : "border-l-emerald-500"}`}>
+        <span className="text-xs font-black uppercase tracking-wider text-slate-400">Próxima ação recomendada</span>
+        <h2 className="mt-2 text-2xl font-black">{nextAction.text}</h2>
+        <p className="mt-1 text-sm text-slate-500">Prioridade calculada automaticamente a partir de cronograma, flashcards, simulados, caderno e horas registradas.</p>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1fr_.9fr]">
         <article className="card p-5">
-          <h2 className="text-lg font-black">Desempenho por área</h2>
-          <p className="mt-1 text-sm text-slate-500">Pizza ponderada por aproveitamento em questões do cronograma e flashcards. Quanto melhor a área, maior a fatia.</p>
-          <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_.9fr]">
-            <div className="h-80">
-              {pieData.length ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={70} outerRadius={120} paddingAngle={3}>
-                      {pieData.map((_, index) => <Cell key={index} fill={colors[index % colors.length]} />)}
-                    </Pie>
-                    <Tooltip formatter={(_, __, payload) => [`${payload.payload.percentual}% · ${payload.payload.acertos} acertos · ${payload.payload.erros} erros`, payload.payload.name]} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <Empty text="Preencha acertos/erros no cronograma ou revise flashcards para gerar o gráfico." />
-              )}
-            </div>
-            <div className="grid content-center gap-2">
-              {pieData.map((item, index) => (
-                <div key={item.name} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
-                  <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} />{item.name}</span>
-                  <strong>{item.percentual}%</strong>
-                </div>
-              ))}
-            </div>
+          <h2 className="text-lg font-black">Lista inteligente de prioridade</h2>
+          <div className="mt-4 grid gap-2">
+            <Priority tone="red" label="Aulas atrasadas" value={overdueLessons.length} detail={overdueLessons[0]?.aula || "Nada atrasado"} />
+            <Priority tone="red" label="Revisões atrasadas" value={overdueReviews.length} detail={overdueReviews[0]?.aula || "Nada atrasado"} />
+            <Priority tone="red" label="Flashcards atrasados" value={flashOverdue.length} detail={`${flashDue.length} pendentes no total`} />
+            <Priority tone="yellow" label="Simulados programados" value={scheduledExams.length} detail={scheduledExams[0]?.dataBR || "Sem simulado próximo"} />
+            <Priority tone="yellow" label="Questões pendentes" value={lessons.length - Object.keys(questionByLesson).length} detail="aulas sem questões preenchidas" />
+            <Priority tone="green" label="Metas próximas" value={hoursWeek >= 20 ? 1 : 0} detail={`${formatHours(hoursWeek)} estudadas esta semana`} />
           </div>
         </article>
 
         <article className="card p-5">
-          <h2 className="text-lg font-black">Prioridades automáticas</h2>
+          <h2 className="text-lg font-black">Alertas</h2>
+          <div className="mt-4 grid gap-2">
+            {alerts.map((item) => <AlertRow key={item.text} tone={item.tone} text={item.text} />)}
+            {!alerts.length && <Empty text="Nenhum alerta crítico agora." />}
+          </div>
+        </article>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1.4fr_.7fr]">
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Desempenho por área</h2>
           <div className="mt-4 grid gap-3">
-            {overdue.slice(0, 6).map((lesson) => (
-              <div key={lesson.id} className="rounded-xl border border-rose-100 bg-rose-50 p-3 text-sm dark:border-rose-500/20 dark:bg-rose-500/10">
-                <strong>{lesson.disciplina}</strong>
-                <p className="text-slate-600 dark:text-slate-300">{lesson.aula}</p>
-              </div>
-            ))}
-            {!overdue.length && <Empty text="Nenhuma aula atrasada pendente." />}
+            {performanceByArea.map((item) => <PerformanceBar key={item.area} item={item} />)}
+          </div>
+        </article>
+        <div className="grid gap-6">
+          <SummaryCard title="Melhor desempenho" value={bestArea ? `${bestArea.area} · ${bestArea.percentual}%` : "Sem dados"} />
+          <SummaryCard title="Pior desempenho" value={worstArea ? `${worstArea.area} · ${worstArea.percentual}%` : "Sem dados"} />
+        </div>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Tempo de estudo</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Metric title="Hoje" value={formatHours(hoursToday)} />
+            <Metric title="Esta semana" value={formatHours(hoursWeek)} />
+            <Metric title="Este mês" value={formatHours(hoursMonth)} />
+            <Metric title="Total" value={formatHours(hoursTotal)} />
+          </div>
+          <h3 className="mt-5 text-sm font-black">Ranking de dedicação</h3>
+          <div className="mt-3 grid gap-2">
+            <Row left="Matéria mais estudada" right={mostStudied ? `${mostStudied.area} · ${formatHours(mostStudied.hours)}` : "Sem dados"} />
+            <Row left="Matéria menos estudada" right={leastStudied ? `${leastStudied.area} · ${formatHours(leastStudied.hours)}` : "Sem dados"} />
+            <Row left="Sistema mais estudado" right={topSystem ? `${topSystem.system} · ${formatHours(topSystem.hours)}` : "Sem dados"} />
+            <Row left="Sistema negligenciado" right={neglectedSystem ? `${neglectedSystem.system} · ${formatHours(neglectedSystem.hours)}` : "Sem dados"} />
+          </div>
+        </article>
+
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Horas por grande área</h2>
+          <div className="mt-4 grid gap-2">
+            {hoursByArea.map((item) => <HorizontalValue key={item.area} label={item.area} value={formatHours(item.hours)} pct={hoursTotal ? Math.round((item.hours / hoursTotal) * 100) : 0} />)}
+          </div>
+          <h3 className="mt-5 text-sm font-black">Horas por sistema</h3>
+          <div className="mt-3 grid gap-2">
+            {hoursBySystem.map((item) => <HorizontalValue key={item.system} label={item.system} value={formatHours(item.hours)} pct={hoursTotal ? Math.round((item.hours / hoursTotal) * 100) : 0} />)}
+            {!hoursBySystem.length && <Empty text="Os sistemas serão inferidos pelas observações e registros." />}
           </div>
         </article>
       </section>
 
       <section className="card p-5">
-        <h2 className="text-lg font-black">Controle automático de questões por grande área</h2>
-        <p className="mt-1 text-sm text-slate-500">Dados puxados automaticamente da aba Cronograma e das respostas dos flashcards.</p>
-        <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <Metric title="Questões registradas" value={questionTotals.feitas || questionTotals.respondidas} detail={`${questionTotals.aulas} aula(s) com questões`} />
-          <Metric title="Acertos" value={questionTotals.acertos} detail={`${questionTotals.percentual}% de aproveitamento`} />
-          <Metric title="Erros" value={questionTotals.erros} detail="para revisar no caderno" />
-          <Metric title="Áreas monitoradas" value={rankedAreas.length} detail={`${areas.length} grandes áreas no cronograma`} />
-        </div>
-        <div className="mt-5 grid gap-6 xl:grid-cols-[1.2fr_.8fr]">
-          <div>
-            <h3 className="text-sm font-black">Resumo por grande área</h3>
-            <div className="mt-3 grid gap-2">
-              {performanceByArea.map((item) => <AreaInsight key={item.area} item={item} />)}
-            </div>
-          </div>
-          <div>
-            <h3 className="text-sm font-black">Overview dos estudos</h3>
-            <div className="mt-3 grid gap-3">
-              <InsightBox title="Melhor desempenho" items={bestAreas} empty="Preencha acertos e erros para descobrir suas áreas mais fortes." tone="good" />
-              <InsightBox title="Precisa de mais revisão" items={worstAreas} empty="Ainda não há dados suficientes para apontar os pontos fracos." tone="risk" />
-              <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 text-sm dark:border-violet-400/20 dark:bg-slate-900">
-                <strong>Leitura rápida</strong>
-                <p className="mt-1 text-slate-500">{questionTotals.respondidas ? `Você tem ${questionTotals.percentual}% de aproveitamento geral, com ${questionTotals.erros} erro(s) distribuídos nas matérias preenchidas.` : "Assim que você preencher questões ou flashcards, este painel passa a mostrar seu aproveitamento por matéria automaticamente."}</p>
-              </div>
-            </div>
-          </div>
+        <h2 className="text-lg font-black">Heatmap de estudo</h2>
+        <div className="mt-4 grid grid-flow-col grid-rows-7 justify-start gap-1 overflow-x-auto">
+          {heatmapDays.map((day) => <div key={day.key} title={`${day.key} · ${formatHours(day.hours)}`} className={`h-4 w-4 rounded-[4px] ${["bg-slate-100 dark:bg-slate-800", "bg-emerald-200", "bg-emerald-400", "bg-emerald-600", "bg-emerald-800"][day.level]}`} />)}
         </div>
       </section>
 
-      <section className="card min-h-80 p-5">
-        <h2 className="text-lg font-black">Ranking de assuntos mais errados</h2>
-        <p className="mt-1 text-sm text-slate-500">Considera erros salvos no caderno e flashcards marcados como difíceis.</p>
-        <div className="mt-6 grid gap-2">
-          {wrongRanking.map(([topic, count]) => <Row key={topic} left={topic} right={`${count} erro(s)`} />)}
-          {!wrongRanking.length && <Empty text="O ranking será criado automaticamente a partir do caderno de erros e flashcards." />}
+      <section className="grid gap-6 xl:grid-cols-2">
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Flashcards</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Metric title="Totais" value={flashcards.length} />
+            <Metric title="Pendentes" value={flashDue.length} />
+            <Metric title="Atrasados" value={flashOverdue.length} />
+            <Metric title="Revisados hoje" value={flashReviewedToday.length} />
+            <Metric title="Taxa de acerto" value={`${flashHits + flashMisses ? Math.round((flashHits / (flashHits + flashMisses)) * 100) : 0}%`} />
+            <Metric title="Difíceis" value={difficultCards} />
+            <Metric title="Marcados como erro" value={flashcards.filter((card) => Number(card.erros || 0) > 0).length} />
+          </div>
+        </article>
+
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Caderno de erros</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Metric title="Total de erros" value={errors.length} />
+            <Metric title="Abertos" value={Math.max(0, errors.length - resolvedErrors)} />
+            <Metric title="Resolvidos" value={resolvedErrors} />
+            <Metric title="Recorrentes" value={recurringErrors.length} />
+            <Metric title="Sem flashcard" value={errorsWithoutFlashcard} />
+          </div>
+          <h3 className="mt-5 text-sm font-black">Top 10 assuntos mais errados</h3>
+          <div className="mt-3 grid gap-2">
+            {wrongRanking.map(([topic, count]) => <Row key={topic} left={topic} right={`${count} erro(s)`} />)}
+            {!wrongRanking.length && <Empty text="O ranking será criado automaticamente a partir do caderno de erros." />}
+          </div>
+        </article>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Questões e simulados</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Metric title="Questões esta semana" value={examsThisWeek.reduce((acc, item) => acc + item.acertos + item.erros, 0)} />
+            <Metric title="Questões este mês" value={examsThisMonth.reduce((acc, item) => acc + item.acertos + item.erros, 0)} />
+            <Metric title="Acerto geral" value={`${generalAccuracy}%`} />
+            <Metric title="Simulados realizados" value={examNames.size} />
+            <Metric title="Média dos simulados" value={`${examAverage}%`} />
+          </div>
+        </article>
+
+        <article className="card p-5">
+          <h2 className="text-lg font-black">Evolução temporal</h2>
+          <div className="mt-4 h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={activityByMonth}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="month" tickLine={false} axisLine={false} />
+                <YAxis tickLine={false} axisLine={false} />
+                <Tooltip />
+                <Line type="monotone" dataKey="horas" stroke="#b91c1c" strokeWidth={3} name="Horas" />
+                <Line type="monotone" dataKey="simulados" stroke="#7c3aed" strokeWidth={2} name="Simulados" />
+                <Line type="monotone" dataKey="flashcards" stroke="#0f766e" strokeWidth={2} name="Flashcards" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </article>
+      </section>
+
+      <section className="card p-5">
+        <h2 className="text-lg font-black">Volume mensal</h2>
+        <div className="mt-4 h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={activityByMonth}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" tickLine={false} axisLine={false} />
+              <YAxis tickLine={false} axisLine={false} />
+              <Tooltip />
+              <Bar dataKey="questoes" fill="#d946ef" radius={[8, 8, 0, 0]} name="Questões" />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </section>
     </div>
@@ -232,34 +406,45 @@ function Metric({ title, value, detail }: { title: string; value: string | numbe
   );
 }
 
-function AreaInsight({ item }: { item: { area: string; acertos: number; erros: number; feitas: number; aulas: number; respondidas: number; percentual: number } }) {
+function PerformanceBar({ item }: { item: { area: string; percentual: number; acertos: number; erros: number; total: number } }) {
   return (
-    <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800">
+      <div className="flex items-center justify-between gap-3 text-sm">
         <strong>{item.area}</strong>
-        <span className="text-sm font-black">{item.respondidas ? `${item.percentual}%` : "sem dados"}</span>
+        <span className="font-black">{item.percentual}%</span>
       </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
-        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${item.percentual}%` }} />
+      <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
+        <div className="h-full rounded-full bg-red-700" style={{ width: `${item.percentual}%` }} />
       </div>
-      <p className="mt-2 text-sm text-slate-500">{item.acertos} acertos · {item.erros} erros · {item.aulas} aula(s) preenchidas</p>
+      <p className="mt-2 text-xs text-slate-500">{item.acertos} acertos · {item.erros} erros · {item.total} respostas</p>
     </div>
   );
 }
 
-function InsightBox({ title, items, empty, tone }: { title: string; items: { area: string; percentual: number; acertos: number; erros: number; respondidas: number }[]; empty: string; tone: "good" | "risk" }) {
+function Priority({ tone, label, value, detail }: { tone: "red" | "yellow" | "green"; label: string; value: number; detail: string }) {
+  const color = tone === "red" ? "bg-red-600" : tone === "yellow" ? "bg-amber-500" : "bg-emerald-500";
   return (
-    <div className="rounded-xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
-      <strong>{title}</strong>
-      <div className="mt-3 grid gap-2">
-        {items.map((item) => (
-          <div key={item.area} className="flex items-center justify-between gap-3 text-sm">
-            <span>{item.area}</span>
-            <span className={`font-black ${tone === "good" ? "text-emerald-600" : "text-red-600"}`}>{item.percentual}%</span>
-          </div>
-        ))}
-        {!items.length && <p className="text-sm text-slate-500">{empty}</p>}
-      </div>
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
+      <span className="flex min-w-0 items-center gap-2"><span className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} /><span className="truncate"><strong>{label}</strong><span className="block truncate text-slate-500">{detail}</span></span></span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function AlertRow({ tone, text }: { tone: string; text: string }) {
+  const color = tone === "red" ? "text-red-700 dark:text-red-300" : tone === "yellow" ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300";
+  return <div className={`rounded-xl bg-slate-50 p-3 text-sm font-bold dark:bg-slate-800 ${color}`}>{text}</div>;
+}
+
+function SummaryCard({ title, value }: { title: string; value: string }) {
+  return <article className="card p-5"><span className="text-xs font-black uppercase tracking-wider text-slate-400">{title}</span><strong className="mt-2 block text-2xl font-black">{value}</strong></article>;
+}
+
+function HorizontalValue({ label, value, pct }: { label: string; value: string; pct: number }) {
+  return (
+    <div className="rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
+      <div className="flex items-center justify-between gap-3"><strong>{label}</strong><span>{value}</span></div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10"><div className="h-full rounded-full bg-violet-700" style={{ width: `${Math.min(100, pct)}%` }} /></div>
     </div>
   );
 }
