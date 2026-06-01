@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BookOpenCheck, Database, FileQuestion, ImagePlus, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { BookOpenCheck, Database, FileQuestion, ImagePlus, Pencil, Plus, RotateCcw, Shuffle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { areas } from "@/utils/schedule";
@@ -27,6 +27,23 @@ type Note = {
   createdAt: string;
 };
 
+type Flashcard = {
+  id: string;
+  pergunta: string;
+  resposta: string;
+  materia: string | null;
+  deck: string | null;
+  tag: string | null;
+  imagem: string | null;
+  dueDate: string;
+  intervalDays: number;
+  repetitions: number;
+  acertos: number;
+  erros: number;
+  lastDifficulty: string | null;
+  createdAt: string;
+};
+
 type NotebookSection = "overview" | "review" | "simulation" | "new" | "manage";
 type SimAnswer = { noteId: string; selected: string; correct: boolean };
 
@@ -44,6 +61,18 @@ const emptyQuestion = {
   revisao: "",
   imagem: ""
 };
+
+const emptyCard = {
+  materia: areas[0],
+  tag: "",
+  pergunta: "",
+  resposta: "",
+  imagem: ""
+};
+
+function compactDate(value: string | Date) {
+  return new Date(value).toLocaleDateString("sv-SE");
+}
 
 function shuffle<T>(items: T[]) {
   return [...items].sort(() => Math.random() - 0.5);
@@ -63,6 +92,12 @@ function correctAnswer(note: Note) {
   return note.respostaCorreta || note.resposta || "";
 }
 
+function nextDate(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
 async function fileToDataUrl(file?: File) {
   if (!file) return "";
   if (file.size > 850_000) {
@@ -79,9 +114,17 @@ async function fileToDataUrl(file?: File) {
 
 export function NotebookView() {
   const [notes, setNotes] = useState<Note[]>([]);
+  const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [section, setSection] = useState<NotebookSection>("overview");
   const [questionForm, setQuestionForm] = useState(emptyQuestion);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [cardForm, setCardForm] = useState(emptyCard);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [flashArea, setFlashArea] = useState("Todas as materias");
+  const [flashMode, setFlashMode] = useState("Revisoes de hoje/atrasadas");
+  const [flashSession, setFlashSession] = useState<Flashcard[]>([]);
+  const [flashIndex, setFlashIndex] = useState(0);
+  const [showFlashAnswer, setShowFlashAnswer] = useState(false);
   const [manageArea, setManageArea] = useState("Todas");
   const [reviewArea, setReviewArea] = useState("Todas");
   const [reviewSession, setReviewSession] = useState<Note[]>([]);
@@ -97,7 +140,15 @@ export function NotebookView() {
   const [simFinished, setSimFinished] = useState(false);
 
   useEffect(() => {
-    api<Note[]>("/api/errors").then(setNotes).catch(() => setNotes([]));
+    Promise.all([api<Note[]>("/api/errors"), api<Flashcard[]>("/api/flashcards")])
+      .then(([noteItems, cardItems]) => {
+        setNotes(noteItems);
+        setFlashcards(cardItems);
+      })
+      .catch(() => {
+        setNotes([]);
+        setFlashcards([]);
+      });
   }, []);
 
   const stats = useMemo(() => ({
@@ -110,7 +161,12 @@ export function NotebookView() {
   const filteredManage = useMemo(() => notes.filter((note) => manageArea === "Todas" || note.materia === manageArea), [manageArea, notes]);
   const currentReview = reviewSession[reviewIndex];
   const currentSim = simSession[simIndex];
+  const currentFlashcard = flashSession[flashIndex];
   const simCorrectCount = simAnswers.filter((answer) => answer.correct).length;
+  const decks = useMemo(() => areas.map((area) => ({
+    area,
+    flashcards: flashcards.filter((card) => card.materia === area || card.deck === area).length
+  })), [flashcards]);
 
   function resetForm(materia = questionForm.materia) {
     setQuestionForm({ ...emptyQuestion, materia });
@@ -258,6 +314,83 @@ export function NotebookView() {
     setSimRevealed(false);
   }
 
+  function dueFlashcard(card: Flashcard) {
+    return compactDate(card.dueDate || card.createdAt) <= compactDate(new Date());
+  }
+
+  async function saveFlashcard() {
+    if (!cardForm.pergunta.trim() || !cardForm.resposta.trim()) {
+      toast.error("Preencha pergunta e resposta do flashcard.");
+      return;
+    }
+    const saved = await api<Flashcard>(editingCardId ? `/api/flashcards/${editingCardId}` : "/api/flashcards", {
+      method: editingCardId ? "PATCH" : "POST",
+      body: JSON.stringify({
+        pergunta: cardForm.pergunta,
+        resposta: cardForm.resposta,
+        materia: cardForm.materia,
+        deck: cardForm.materia,
+        tag: cardForm.tag,
+        imagem: cardForm.imagem || undefined,
+        dueDate: editingCardId ? undefined : nextDate(1),
+        intervalDays: editingCardId ? undefined : 1
+      })
+    });
+    setFlashcards((current) => editingCardId ? current.map((card) => card.id === saved.id ? saved : card) : [saved, ...current]);
+    setCardForm({ ...emptyCard, materia: cardForm.materia });
+    setEditingCardId(null);
+    toast.success(editingCardId ? "Flashcard atualizado" : "Flashcard salvo");
+  }
+
+  function editFlashcard(card: Flashcard) {
+    setEditingCardId(card.id);
+    setCardForm({
+      materia: card.materia || card.deck || areas[0],
+      tag: card.tag || "",
+      pergunta: card.pergunta,
+      resposta: card.resposta,
+      imagem: card.imagem || ""
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function removeFlashcard(id: string) {
+    await api(`/api/flashcards/${id}`, { method: "DELETE" });
+    setFlashcards((current) => current.filter((card) => card.id !== id));
+    setFlashSession((current) => current.filter((card) => card.id !== id));
+    toast.success("Flashcard apagado");
+  }
+
+  function startFlashSession() {
+    const filtered = flashcards.filter((card) => {
+      const areaOk = flashArea === "Todas as materias" || card.materia === flashArea || card.deck === flashArea;
+      const modeOk = flashMode === "Todos os flashcards" || dueFlashcard(card);
+      return areaOk && modeOk;
+    });
+    setFlashSession(shuffle(filtered));
+    setFlashIndex(0);
+    setShowFlashAnswer(false);
+    if (!filtered.length) toast.error("Nenhum flashcard encontrado para essa selecao.");
+  }
+
+  async function rateFlashcard(label: string, days: number) {
+    if (!currentFlashcard) return;
+    const isHit = label === "Medio" || label === "Facil";
+    const updated = await api<Flashcard>(`/api/flashcards/${currentFlashcard.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        dueDate: nextDate(days),
+        lastDifficulty: label,
+        acertos: Number(currentFlashcard.acertos || 0) + (isHit ? 1 : 0),
+        erros: Number(currentFlashcard.erros || 0) + (isHit ? 0 : 1)
+      })
+    });
+    setFlashcards((current) => current.map((card) => card.id === updated.id ? updated : card));
+    setFlashSession((current) => current.map((card) => card.id === updated.id ? updated : card));
+    setShowFlashAnswer(false);
+    setFlashIndex((current) => Math.min(current + 1, Math.max(flashSession.length - 1, 0)));
+  }
+
   return (
     <div className="grid gap-6">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -402,6 +535,76 @@ export function NotebookView() {
           </div>
         </section>
       )}
+
+      <section className="grid gap-6 xl:grid-cols-[1fr_.9fr]">
+        <article className="card p-5">
+          <h2 className="text-xl font-black">Novo flashcard</h2>
+          <div className="mt-4 grid gap-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              <select className="input" value={cardForm.materia} onChange={(event) => setCardForm({ ...cardForm, materia: event.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
+              <input className="input" placeholder="Tag opcional. Ex.: HAS, arritmia..." value={cardForm.tag} onChange={(event) => setCardForm({ ...cardForm, tag: event.target.value })} />
+            </div>
+            <textarea className="input min-h-24" placeholder="Pergunta do flashcard" value={cardForm.pergunta} onChange={(event) => setCardForm({ ...cardForm, pergunta: event.target.value })} />
+            <textarea className="input min-h-24" placeholder="Resposta e explicacao" value={cardForm.resposta} onChange={(event) => setCardForm({ ...cardForm, resposta: event.target.value })} />
+            <ImageUpload label="Imagem do flashcard (opcional)" onImage={(imagem) => setCardForm({ ...cardForm, imagem })} />
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={saveFlashcard}>{editingCardId ? "Atualizar flashcard" : "Salvar flashcard"}</button>
+              {editingCardId && <button className="btn-secondary" onClick={() => { setEditingCardId(null); setCardForm(emptyCard); }}>Cancelar edicao</button>}
+            </div>
+          </div>
+        </article>
+
+        <article className="card p-5">
+          <h2 className="text-xl font-black">Baralhos automaticos por grande area</h2>
+          <div className="mt-4 grid gap-3">
+            {decks.map((deck) => (
+              <div key={deck.area} className="rounded-xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
+                <strong>{deck.area}</strong>
+                <p className="mt-1 text-sm text-slate-500">{deck.flashcards} flashcard(s)</p>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <FlashcardStudy
+        area={flashArea}
+        setArea={setFlashArea}
+        mode={flashMode}
+        setMode={setFlashMode}
+        onShuffle={startFlashSession}
+        current={currentFlashcard}
+        index={flashIndex}
+        total={flashSession.length}
+        showAnswer={showFlashAnswer}
+        setShowAnswer={setShowFlashAnswer}
+        onPrevious={() => {
+          setShowFlashAnswer(false);
+          setFlashIndex((current) => Math.max(current - 1, 0));
+        }}
+        onNext={() => {
+          setShowFlashAnswer(false);
+          setFlashIndex((current) => Math.min(current + 1, Math.max(flashSession.length - 1, 0)));
+        }}
+        onDelete={currentFlashcard ? () => removeFlashcard(currentFlashcard.id) : undefined}
+        onRate={rateFlashcard}
+      />
+
+      <section className="card p-5">
+        <h2 className="text-lg font-black">Flashcards cadastrados</h2>
+        <div className="mt-4 grid gap-2">
+          {flashcards.slice(0, 12).map((card) => (
+            <div key={card.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
+              <span><strong>{card.pergunta}</strong><span className="block text-slate-500">{card.materia || "Sem materia"} · proxima revisao {new Date(card.dueDate || card.createdAt).toLocaleDateString("pt-BR")}</span></span>
+              <span className="flex gap-2">
+                <button className="btn-secondary px-3" onClick={() => editFlashcard(card)}><Pencil size={16} /> Editar</button>
+                <button className="btn-secondary px-3" onClick={() => removeFlashcard(card.id)}><Trash2 size={16} /></button>
+              </span>
+            </div>
+          ))}
+          {!flashcards.length && <Empty text="Nenhum flashcard cadastrado ainda." />}
+        </div>
+      </section>
     </div>
   );
 }
@@ -505,6 +708,68 @@ function QuestionPractice({ note, index, total, revealed, selected, onSelected, 
         {!simulationMode && <button className="btn-secondary" onClick={onNext}>Pular</button>}
       </div>
     </div>
+  );
+}
+
+function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, index, total, showAnswer, setShowAnswer, onPrevious, onNext, onDelete, onRate }: {
+  area: string;
+  setArea: (value: string) => void;
+  mode: string;
+  setMode: (value: string) => void;
+  onShuffle: () => void;
+  current?: Flashcard;
+  index: number;
+  total: number;
+  showAnswer: boolean;
+  setShowAnswer: (value: boolean | ((current: boolean) => boolean)) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onDelete?: () => void;
+  onRate: (label: string, days: number) => void;
+}) {
+  return (
+    <article className="card p-5">
+      <h2 className="text-xl font-black">Revisar flashcards</h2>
+      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+        <select className="input" value={area} onChange={(event) => setArea(event.target.value)}>
+          <option>Todas as materias</option>
+          {areas.map((item) => <option key={item}>{item}</option>)}
+        </select>
+        <select className="input" value={mode} onChange={(event) => setMode(event.target.value)}>
+          <option>Revisoes de hoje/atrasadas</option>
+          <option>Todos os flashcards</option>
+        </select>
+        <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={onShuffle}><Shuffle size={16} /> Embaralhar</button>
+      </div>
+      {current ? (
+        <div className="mt-5 grid gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-black text-violet-950 dark:text-violet-100">
+            <span>{index + 1} de {total}</span>
+            {onDelete && <button className="btn-secondary px-3" onClick={onDelete}><Trash2 size={16} /></button>}
+          </div>
+          <div className="grid min-h-56 content-center rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-6 dark:border-fuchsia-400/30 dark:from-violet-500/10 dark:to-fuchsia-500/10">
+            <span className="text-xs font-black uppercase tracking-wider text-fuchsia-600">{showAnswer ? "Verso do flashcard" : "Frente do flashcard"}</span>
+            <p className="mt-4 whitespace-pre-wrap text-base font-black text-violet-950 dark:text-violet-50">{showAnswer ? current.resposta : current.pergunta}</p>
+            {current.imagem && !showAnswer && <img className="mt-4 max-h-64 rounded-xl border border-slate-200 object-contain dark:border-white/10" src={current.imagem} alt="" />}
+          </div>
+          {showAnswer && (
+            <div className="grid gap-2 md:grid-cols-4">
+              <button className="btn-secondary min-h-16" onClick={() => onRate("Muito dificil", 1)}>Muito dificil<br /><span className="text-xs">amanha</span></button>
+              <button className="btn-secondary min-h-16" onClick={() => onRate("Dificil", 3)}>Dificil<br /><span className="text-xs">3 dias</span></button>
+              <button className="btn-secondary min-h-16" onClick={() => onRate("Medio", 7)}>Medio<br /><span className="text-xs">7 dias</span></button>
+              <button className="btn-primary min-h-16 bg-red-700 hover:bg-red-800" onClick={() => onRate("Facil", 14)}>Facil<br /><span className="text-xs">14 dias</span></button>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-secondary" disabled={index === 0} onClick={onPrevious}>Anterior</button>
+            <button className="btn-secondary" onClick={() => setShowAnswer((value) => !value)}>{showAnswer ? "Ver pergunta" : "Virar card"}</button>
+            <button className="btn-secondary" disabled={index >= total - 1} onClick={onNext}>Proximo</button>
+          </div>
+        </div>
+      ) : (
+        <Empty text="Escolha uma materia e clique em Embaralhar para revisar seus flashcards." />
+      )}
+    </article>
   );
 }
 
