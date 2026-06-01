@@ -12,6 +12,7 @@ type ErrorNote = { id: string; tema: string; materia: string | null; erro: strin
 type Flashcard = { id: string; pergunta: string; tag: string | null; materia: string | null; deck: string | null; dueDate: string; updatedAt?: string; acertos: number; erros: number; lastDifficulty?: string | null };
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
 type Performance = { id: string; materia: string; acertos: number; erros: number; percentual: number; examName: string | null; data: string; createdAt: string };
+type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 
 const today = todayISO();
 const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
@@ -58,6 +59,7 @@ export function DashboardView() {
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [performances, setPerformances] = useState<Performance[]>([]);
+  const [tasks, setTasks] = useState<TaskRecord[]>([]);
 
   useEffect(() => {
     Promise.all([
@@ -65,14 +67,16 @@ export function DashboardView() {
       api<ErrorNote[]>("/api/errors"),
       api<Flashcard[]>("/api/flashcards"),
       api<Productivity[]>("/api/productivity"),
-      api<Performance[]>("/api/performance")
+      api<Performance[]>("/api/performance"),
+      api<TaskRecord[]>("/api/tasks")
     ])
-      .then(([questionItems, errorItems, cardItems, productivityItems, performanceItems]) => {
+      .then(([questionItems, errorItems, cardItems, productivityItems, performanceItems, taskItems]) => {
         setLessonQuestionRecords(questionItems);
         setErrors(errorItems);
         setFlashcards(cardItems);
         setProductivity(productivityItems);
         setPerformances(performanceItems);
+        setTasks(taskItems);
       })
       .catch(() => {
         setLessonQuestionRecords([]);
@@ -80,6 +84,7 @@ export function DashboardView() {
         setFlashcards([]);
         setProductivity([]);
         setPerformances([]);
+        setTasks([]);
       });
   }, []);
 
@@ -102,9 +107,19 @@ export function DashboardView() {
     return { ...remote, ...storeQuestions };
   }, [lessonQuestionRecords, storeQuestions]);
 
+  const extraStudyTasks = useMemo(() => tasks.filter((task) => task.tipo === "EXTRA"), [tasks]);
+
   const performanceByArea = useMemo(() => areas.map((area) => {
     const questionStats = lessons.filter((lesson) => lesson.disciplina === area).reduce((acc, lesson) => {
       const item = questionByLesson[lesson.id];
+      if (!item) return acc;
+      acc.acertos += Number(item.acertos || 0);
+      acc.erros += Number(item.erros || 0);
+      acc.feitas += Math.max(Number(item.feitas || 0), Number(item.acertos || 0) + Number(item.erros || 0));
+      return acc;
+    }, { acertos: 0, erros: 0, feitas: 0 });
+    const extraQuestionStats = extraStudyTasks.filter((task) => task.materia === area).reduce((acc, task) => {
+      const item = questionByLesson[task.externalId || task.id];
       if (!item) return acc;
       acc.acertos += Number(item.acertos || 0);
       acc.erros += Number(item.erros || 0);
@@ -121,11 +136,11 @@ export function DashboardView() {
       acc.erros += Number(card.erros || 0);
       return acc;
     }, { acertos: 0, erros: 0 });
-    const acertos = questionStats.acertos + simStats.acertos + cardStats.acertos;
-    const erros = questionStats.erros + simStats.erros + cardStats.erros;
+    const acertos = questionStats.acertos + extraQuestionStats.acertos + simStats.acertos + cardStats.acertos;
+    const erros = questionStats.erros + extraQuestionStats.erros + simStats.erros + cardStats.erros;
     const total = acertos + erros;
-    return { area, acertos, erros, total, feitas: questionStats.feitas, percentual: total ? Math.round((acertos / total) * 100) : 0 };
-  }), [flashcards, lessons, performances, questionByLesson]);
+    return { area, acertos, erros, total, feitas: questionStats.feitas + extraQuestionStats.feitas, percentual: total ? Math.round((acertos / total) * 100) : 0 };
+  }), [extraStudyTasks, flashcards, lessons, performances, questionByLesson]);
 
   const questionTotals = performanceByArea.reduce((acc, item) => ({
     acertos: acc.acertos + item.acertos,
@@ -169,16 +184,24 @@ export function DashboardView() {
   const errorsWithoutFlashcard = errors.filter((item) => !item.flashcard && !item.revisao).length;
   const resolvedErrors = errors.filter((item) => item.dificuldade === "Fácil" || item.dificuldade === "Dificuldade baixa").length;
 
-  const examsThisWeek = performances.filter((item) => new Date(item.data) >= weekStart);
   const examsThisMonth = performances.filter((item) => monthKey(item.data) === currentMonth);
   const examNames = new Set(performances.map((item) => item.examName || item.id));
   const examAverage = performances.length ? Math.round(performances.reduce((acc, item) => acc + item.percentual, 0) / performances.length) : 0;
+  const lessonDateById = new Map<string, string>();
+  lessons.forEach((lesson) => lessonDateById.set(lesson.id, lesson.data));
+  extraStudyTasks.forEach((task) => lessonDateById.set(task.externalId || task.id, compactDate(task.data)));
+  const questionEvents = Object.entries(questionByLesson).map(([lessonId, item]) => ({
+    date: lessonDateById.get(lessonId) || today,
+    total: Math.max(Number(item.feitas || 0), Number(item.acertos || 0) + Number(item.erros || 0))
+  }));
+  const questionsThisWeek = questionEvents.filter((item) => parseISODate(item.date) >= weekStart).reduce((acc, item) => acc + item.total, 0);
+  const questionsThisMonth = questionEvents.filter((item) => monthKey(item.date) === currentMonth).reduce((acc, item) => acc + item.total, 0);
 
   const activityByMonth = Array.from(new Set([...productivity.map((item) => monthKey(item.data)), ...performances.map((item) => monthKey(item.data))])).sort().slice(-6).map((month) => ({
     month,
     horas: Math.round(productivity.filter((item) => monthKey(item.data) === month).reduce((acc, item) => acc + Number(item.horas || 0), 0) * 10) / 10,
     simulados: new Set(performances.filter((item) => monthKey(item.data) === month).map((item) => item.examName || item.id)).size,
-    questoes: lessonQuestionRecords.filter((item) => monthKey(new Date()) === month).reduce((acc, item) => acc + Math.max(item.feitas, item.acertos + item.erros), 0),
+    questoes: questionEvents.filter((item) => monthKey(item.date) === month).reduce((acc, item) => acc + item.total, 0),
     flashcards: flashcards.filter((item) => item.updatedAt && monthKey(item.updatedAt) === month).length
   }));
 
@@ -352,8 +375,8 @@ export function DashboardView() {
         <article className="card p-5">
           <h2 className="text-lg font-black">Questões e simulados</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Metric title="Questões esta semana" value={examsThisWeek.reduce((acc, item) => acc + item.acertos + item.erros, 0)} />
-            <Metric title="Questões este mês" value={examsThisMonth.reduce((acc, item) => acc + item.acertos + item.erros, 0)} />
+            <Metric title="Questões esta semana" value={questionsThisWeek} />
+            <Metric title="Questões este mês" value={questionsThisMonth} />
             <Metric title="Acerto geral" value={`${generalAccuracy}%`} />
             <Metric title="Simulados realizados" value={examNames.size} />
             <Metric title="Média dos simulados" value={`${examAverage}%`} />

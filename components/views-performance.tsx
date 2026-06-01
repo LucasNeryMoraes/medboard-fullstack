@@ -2,30 +2,69 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { areas, isSaturday, schedule } from "@/utils/schedule";
+import { allLessons, areas, isSaturday, schedule } from "@/utils/schedule";
 
 type Performance = { id: string; materia: string; acertos: number; erros: number; percentual: number; examName: string | null; data: string; createdAt: string };
+type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
+type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 
 const emptyAreas = () => Object.fromEntries(areas.map((area) => [area, { acertos: "", erros: "" }])) as Record<string, { acertos: string; erros: string }>;
 
 export function PerformanceView() {
+  const storeQuestions = useMedboardStore((state) => state.lessonQuestions);
   const [items, setItems] = useState<Performance[]>([]);
+  const [lessonQuestionRecords, setLessonQuestionRecords] = useState<LessonQuestionRecord[]>([]);
+  const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [form, setForm] = useState({ examName: "", data: "", observacoes: "", areas: emptyAreas() });
 
   useEffect(() => {
-    api<Performance[]>("/api/performance").then(setItems).catch(() => setItems([]));
+    Promise.all([
+      api<Performance[]>("/api/performance"),
+      api<LessonQuestionRecord[]>("/api/lesson-questions"),
+      api<TaskRecord[]>("/api/tasks")
+    ])
+      .then(([performanceItems, questionItems, taskItems]) => {
+        setItems(performanceItems);
+        setLessonQuestionRecords(questionItems);
+        setTasks(taskItems);
+      })
+      .catch(() => {
+        setItems([]);
+        setLessonQuestionRecords([]);
+        setTasks([]);
+      });
   }, []);
 
+  const questionByLesson = useMemo(() => {
+    const remote = Object.fromEntries(lessonQuestionRecords.map((item) => [item.lessonId, {
+      done: item.done,
+      feitas: item.feitas,
+      acertos: item.acertos,
+      erros: item.erros,
+      observacoes: item.observacoes || ""
+    }]));
+    return { ...remote, ...storeQuestions };
+  }, [lessonQuestionRecords, storeQuestions]);
+
   const summary = useMemo(() => {
+    const lessons = allLessons();
+    const extraTasks = tasks.filter((task) => task.tipo === "EXTRA");
     return areas.map((area) => {
       const areaItems = items.filter((item) => item.materia === area);
-      const acertos = areaItems.reduce((acc, item) => acc + item.acertos, 0);
-      const erros = areaItems.reduce((acc, item) => acc + item.erros, 0);
+      const questionItems = lessons.filter((lesson) => lesson.disciplina === area).map((lesson) => questionByLesson[lesson.id]).filter(Boolean);
+      const extraQuestionItems = extraTasks.filter((task) => task.materia === area).map((task) => questionByLesson[task.externalId || task.id]).filter(Boolean);
+      const acertos = areaItems.reduce((acc, item) => acc + item.acertos, 0)
+        + questionItems.reduce((acc, item) => acc + Number(item.acertos || 0), 0)
+        + extraQuestionItems.reduce((acc, item) => acc + Number(item.acertos || 0), 0);
+      const erros = areaItems.reduce((acc, item) => acc + item.erros, 0)
+        + questionItems.reduce((acc, item) => acc + Number(item.erros || 0), 0)
+        + extraQuestionItems.reduce((acc, item) => acc + Number(item.erros || 0), 0);
       const total = acertos + erros;
       return { area, acertos, erros, total, pct: total ? Math.round((acertos / total) * 100) : 0 };
     });
-  }, [items]);
+  }, [items, questionByLesson, tasks]);
 
   const scheduled = useMemo(() => {
     return schedule.rows

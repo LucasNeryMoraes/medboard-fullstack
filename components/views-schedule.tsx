@@ -43,11 +43,18 @@ function formatHours(value: number) {
 export function ScheduleView() {
   const store = useMedboardStore();
   const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
-  const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "" });
+  const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "", observacoes: "", feitas: "", acertos: "", erros: "" });
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const selectedWeek = store.week || schedule.rows.find((row) => row.data === todayISO())?.semana || schedule.semanas[0];
   const totalProgressIds = useMemo(() => allProgressIds(), []);
-  const progressPct = totalProgressIds.length ? Math.round((store.doneIds.length / totalProgressIds.length) * 100) : 0;
+  const extraProgressIds = useMemo(() => new Set(store.extraStudies.map((study) => study.id)), [store.extraStudies]);
+  const progressDoneCount = useMemo(() => {
+    const staticDone = store.doneIds.filter((id) => totalProgressIds.includes(id)).length;
+    const extraDone = store.doneIds.filter((id) => extraProgressIds.has(id)).length;
+    return staticDone + extraDone;
+  }, [extraProgressIds, store.doneIds, totalProgressIds]);
+  const progressTotal = totalProgressIds.length + extraProgressIds.size;
+  const progressPct = progressTotal ? Math.round((progressDoneCount / progressTotal) * 100) : 0;
   const daysRemaining = Math.max(0, Math.ceil((parseISODate(schedule.stats.fim).getTime() - parseISODate(todayISO()).getTime()) / 86_400_000));
 
   useEffect(() => {
@@ -69,15 +76,34 @@ export function ScheduleView() {
           erros: item.erros,
           observacoes: item.observacoes || ""
         }])));
-        store.setExtraStudies(productivity
+        const extraTasks = tasks
+          .filter((task) => task.tipo === "EXTRA")
+          .map((task) => ({
+            id: task.externalId || task.id,
+            titulo: task.titulo,
+            materia: task.materia || "Sem area",
+            data: toDateInput(task.data),
+            horas: typeof task.metadata === "object" && task.metadata && typeof (task.metadata as Record<string, unknown>).horas === "number" ? (task.metadata as Record<string, number>).horas : 0,
+            observacoes: task.descricao || ""
+          }));
+        const existingExtraIds = new Set(extraTasks.map((study) => study.id));
+        const legacyExtraStudies = productivity
           .filter((item) => item.observacoes?.startsWith("extra-study:"))
-          .map((item) => ({
-            id: item.id,
-            titulo: item.observacoes?.replace("extra-study:", "") || "Estudo externo",
-            materia: item.materia || "Sem area",
-            data: toDateInput(item.data),
-            horas: item.horas
-          })));
+          .map((item) => {
+            const raw = item.observacoes || "";
+            const [, maybeId, ...titleParts] = raw.split(":");
+            const hasStoredId = maybeId?.startsWith("extra-");
+            return {
+              id: hasStoredId ? maybeId : item.id,
+              titulo: hasStoredId ? titleParts.join(":") || "Estudo externo" : raw.replace("extra-study:", "") || "Estudo externo",
+              materia: item.materia || "Sem area",
+              data: toDateInput(item.data),
+              horas: item.horas,
+              observacoes: ""
+            };
+          })
+          .filter((study) => !existingExtraIds.has(study.id));
+        store.setExtraStudies([...extraTasks, ...legacyExtraStudies]);
       } catch {
         // Modo demo ou sessao expirada: mantem a experiencia local.
       }
@@ -128,12 +154,12 @@ export function ScheduleView() {
     return allLessons().filter((lesson) => parseISODate(lesson.data) < today && !store.doneIds.includes(lesson.id));
   }, [store.doneIds]);
 
-  async function syncTask(id: string, checked: boolean, payload: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE"; materia?: string }) {
+  async function syncTask(id: string, checked: boolean, payload: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia?: string; descricao?: string; metadata?: unknown }) {
     store.toggleDone(id);
     try {
       const saved = await api<TaskRecord>("/api/tasks", {
         method: "POST",
-        body: JSON.stringify({ externalId: id, titulo: payload.titulo, data: payload.data, tipo: payload.tipo, materia: payload.materia, status: checked ? "DONE" : "PENDING" })
+        body: JSON.stringify({ externalId: id, titulo: payload.titulo, descricao: payload.descricao, data: payload.data, tipo: payload.tipo, materia: payload.materia, metadata: payload.metadata, status: checked ? "DONE" : "PENDING" })
       });
       setTasks((current) => [saved, ...current.filter((task) => task.id !== saved.id)]);
     } catch {
@@ -219,24 +245,45 @@ export function ScheduleView() {
   }
 
   async function addExtraStudy() {
-    if (!extraForm.titulo.trim() || !extraForm.materia || !extraForm.data || !extraForm.horas) {
-      toast.error("Preencha tema, area, data e horas.");
+    if (!extraForm.titulo.trim() || !extraForm.materia || !extraForm.data) {
+      toast.error("Preencha aula, area e data.");
       return;
     }
+    const feitas = Number(extraForm.feitas || 0);
+    const acertos = Number(extraForm.acertos || 0);
+    const erros = Number(extraForm.erros || 0);
     const study: ExtraStudy = {
-      id: crypto.randomUUID(),
+      id: `extra-${crypto.randomUUID()}`,
       titulo: extraForm.titulo.trim(),
       materia: extraForm.materia,
       data: extraForm.data,
-      horas: clockToHours(extraForm.horas)
+      horas: extraForm.horas ? clockToHours(extraForm.horas) : 0,
+      observacoes: extraForm.observacoes.trim()
     };
     store.addExtraStudy(study);
-    setExtraForm({ titulo: "", materia: "", data: todayISO(), horas: "" });
+    if (!store.doneIds.includes(study.id)) store.toggleDone(study.id);
+    if (feitas || acertos || erros || extraForm.observacoes.trim()) {
+      store.setLessonQuestion(study.id, { done: !!(feitas || acertos || erros), feitas, acertos, erros, observacoes: extraForm.observacoes.trim() });
+    }
+    setExtraForm({ titulo: "", materia: "", data: todayISO(), horas: "", observacoes: "", feitas: "", acertos: "", erros: "" });
     try {
-      await api("/api/productivity", {
+      const saved = await api<TaskRecord>("/api/tasks", {
         method: "POST",
-        body: JSON.stringify({ materia: study.materia, data: study.data, horas: study.horas, rendimento: 100, observacoes: `extra-study:${study.titulo}` })
+        body: JSON.stringify({ externalId: study.id, titulo: study.titulo, descricao: study.observacoes, data: study.data, tipo: "EXTRA", materia: study.materia, status: "DONE", metadata: { horas: study.horas } })
       });
+      setTasks((current) => [saved, ...current.filter((task) => task.id !== saved.id)]);
+      if (study.horas > 0) {
+        await api("/api/productivity", {
+          method: "POST",
+          body: JSON.stringify({ materia: study.materia, data: study.data, horas: study.horas, rendimento: 100, observacoes: `extra-study:${study.id}:${study.titulo}` })
+        });
+      }
+      if (feitas || acertos || erros || extraForm.observacoes.trim()) {
+        await api(`/api/lesson-questions/${study.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ done: !!(feitas || acertos || erros), feitas, acertos, erros, observacoes: extraForm.observacoes.trim() })
+        });
+      }
       toast.success("Estudo externo salvo");
     } catch {
       toast.warning("Estudo salvo localmente; faca login para sincronizar.");
@@ -258,7 +305,7 @@ export function ScheduleView() {
         <article className="card p-4">
           <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Progresso total do cronograma</span>
           <strong className="mt-1 block text-2xl font-black tracking-tight">{progressPct}%</strong>
-          <small className="font-bold text-slate-500 dark:text-slate-400">{store.doneIds.length} de {totalProgressIds.length} concluidos</small>
+          <small className="font-bold text-slate-500 dark:text-slate-400">{progressDoneCount} de {progressTotal} concluidos</small>
         </article>
       </section>
 
@@ -323,17 +370,22 @@ export function ScheduleView() {
             {areas.map((area) => <option key={area}>{area}</option>)}
           </select>
           <input className="input" type="date" value={extraForm.data} onChange={(event) => setExtraForm((current) => ({ ...current, data: event.target.value }))} />
-          <input className="input" type="time" value={extraForm.horas} onChange={(event) => setExtraForm((current) => ({ ...current, horas: event.target.value }))} />
+          <input className="input" type="time" value={extraForm.horas} onChange={(event) => setExtraForm((current) => ({ ...current, horas: event.target.value }))} title="Tempo estudado opcional" />
+          <input className="input" type="number" min="0" placeholder="Questoes feitas" value={extraForm.feitas} onChange={(event) => setExtraForm((current) => ({ ...current, feitas: event.target.value }))} />
+          <input className="input" type="number" min="0" placeholder="Acertos" value={extraForm.acertos} onChange={(event) => setExtraForm((current) => ({ ...current, acertos: event.target.value }))} />
+          <input className="input" type="number" min="0" placeholder="Erros" value={extraForm.erros} onChange={(event) => setExtraForm((current) => ({ ...current, erros: event.target.value }))} />
+          <textarea className="input min-h-12 md:col-span-2" placeholder="Observacoes opcionais" value={extraForm.observacoes} onChange={(event) => setExtraForm((current) => ({ ...current, observacoes: event.target.value }))} />
         </div>
         <button className="btn-primary mt-4 w-full bg-red-700 hover:bg-red-800" onClick={addExtraStudy}>Adicionar estudo</button>
         <div className="mt-5 grid gap-2">
           {store.extraStudies.map((study) => (
-            <div key={study.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
+            <div key={study.id} className="grid gap-1 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800 md:grid-cols-[1fr_auto] md:items-center">
               <strong>{study.titulo}</strong>
-              <span className="text-slate-500">{study.materia} - {study.data} - {formatHours(study.horas)}</span>
+              <span className="text-slate-500">{study.materia} - {study.data} - {study.horas > 0 ? formatHours(study.horas) : "sem tempo"}</span>
+              {study.observacoes && <span className="text-xs text-slate-400 md:col-span-2">{study.observacoes}</span>}
             </div>
           ))}
-          {!store.extraStudies.length && <p className="py-4 text-center text-sm text-slate-400">Nenhum estudo externo adicionando.</p>}
+          {!store.extraStudies.length && <p className="py-4 text-center text-sm text-slate-400">Nenhum estudo externo adicionado.</p>}
         </div>
       </section>
 
@@ -386,6 +438,12 @@ export function ScheduleView() {
             const generatedReviews = (generatedReviewsByDate.get(date) || [])
               .filter((task) => !store.discipline || task.materia === store.discipline)
               .filter(() => !store.type || store.type === "revisao");
+            const q = normalizeText(store.search);
+            const extraStudiesForDate = store.extraStudies
+              .filter((study) => study.data === date)
+              .filter((study) => !store.discipline || study.materia === store.discipline)
+              .filter(() => !store.type || store.type === "livre" || store.type === "aula")
+              .filter((study) => !q || normalizeText(`${study.titulo} ${study.materia} ${study.observacoes || ""}`).includes(q));
             return (
               <article key={date} className="card overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-violet-100 p-4 dark:border-white/10">
@@ -396,6 +454,7 @@ export function ScheduleView() {
                   <div className="flex gap-2">
                     {isToday && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">Hoje</span>}
                     {!!lessonCount && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">{lessonCount} aula(s)</span>}
+                    {!!extraStudiesForDate.length && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">{extraStudiesForDate.length} extra(s)</span>}
                   </div>
                 </div>
                 <div className="grid gap-3 p-4">
@@ -414,6 +473,43 @@ export function ScheduleView() {
                       </div>
                     </button>
                   );})}
+                  {extraStudiesForDate.map((study) => {
+                    const done = store.doneIds.includes(study.id);
+                    const q = store.lessonQuestions[study.id] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
+                    return (
+                      <div key={study.id} className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-400/20 dark:bg-emerald-500/10">
+                        <div className="grid gap-3 md:grid-cols-[auto_1fr_auto]">
+                          <button className="mt-1" aria-label={done ? "Desmarcar estudo extra" : "Marcar estudo extra"} onClick={() => syncTask(study.id, !done, { titulo: study.titulo, data: study.data, tipo: "EXTRA", materia: study.materia, descricao: study.observacoes, metadata: { horas: study.horas } })}>
+                            {done ? <Check className="text-emerald-600" size={20} /> : <Circle className="text-slate-400" size={20} />}
+                          </button>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <strong>{study.materia}</strong>
+                              <span className="badge bg-white text-emerald-700 dark:bg-slate-900 dark:text-emerald-200">Fora do cronograma</span>
+                            </div>
+                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{study.titulo}</p>
+                            {study.observacoes && <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{study.observacoes}</p>}
+                          </div>
+                          <div className="text-sm md:text-right">
+                            <span className="badge bg-white text-emerald-700 dark:bg-slate-900 dark:text-emerald-200">Extra</span>
+                            <p className="mt-2 text-slate-500">{study.horas > 0 ? formatHours(study.horas) : "Sem tempo"}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3 rounded-2xl border border-violet-200 bg-white/70 p-4 dark:border-violet-400/20 dark:bg-slate-950/40">
+                          <label className="flex items-center gap-2 text-sm font-black text-violet-950 dark:text-violet-100">
+                            <input type="checkbox" checked={q.done} onChange={(event) => syncQuestion(study.id, { done: event.target.checked })} />
+                            Questoes deste estudo concluidas
+                          </label>
+                          <div className="mt-4 grid gap-2 md:grid-cols-3">
+                            <input className="input" type="number" min="0" placeholder="Questoes feitas" value={q.feitas || ""} onChange={(event) => syncQuestion(study.id, { feitas: Number(event.target.value || 0) })} />
+                            <input className="input" type="number" min="0" placeholder="Acertos" value={q.acertos || ""} onChange={(event) => syncQuestion(study.id, { acertos: Number(event.target.value || 0) })} />
+                            <input className="input" type="number" min="0" placeholder="Erros" value={q.erros || ""} onChange={(event) => syncQuestion(study.id, { erros: Number(event.target.value || 0) })} />
+                          </div>
+                          <textarea className="input mt-2 min-h-12" placeholder="Observacoes do estudo ou principais erros..." value={q.observacoes} onChange={(event) => syncQuestion(study.id, { observacoes: event.target.value })} />
+                        </div>
+                      </div>
+                    );
+                  })}
                   {rows.flatMap((row) => [
                     ...row.aulas.map((lesson) => {
                       const priority = inferPriority(lesson);
