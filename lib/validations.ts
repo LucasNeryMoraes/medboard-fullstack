@@ -49,6 +49,8 @@ export const flashcardSchema = z.object({
   tag: z.string().optional().nullable(),
   imagem: z.string().optional().nullable(),
   dueDate: z.coerce.date().optional(),
+  intervalDays: z.coerce.number().int().min(0).optional(),
+  repetitions: z.coerce.number().int().min(0).optional(),
   acertos: z.coerce.number().int().min(0).optional(),
   erros: z.coerce.number().int().min(0).optional(),
   lastDifficulty: z.string().optional().nullable()

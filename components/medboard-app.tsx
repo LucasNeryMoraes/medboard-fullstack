@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { signOut } from "next-auth/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTheme } from "next-themes";
-import { BarChart3, CalendarDays, Clock3, LogOut, Moon, NotebookTabs, Search, Sun, Trophy } from "lucide-react";
+import { BarChart3, CalendarDays, Check, Clock3, LogOut, Moon, NotebookTabs, Pause, Play, Search, Sun, Trophy } from "lucide-react";
+import { toast } from "sonner";
 import { DashboardView } from "@/components/views-dashboard";
 import { ScheduleView } from "@/components/views-schedule";
 import { TimerView } from "@/components/views-timer";
@@ -13,6 +14,7 @@ import { PerformanceView } from "@/components/views-performance";
 import { Onboarding } from "@/components/onboarding";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { allProgressIds } from "@/utils/schedule";
+import { api } from "@/services/api";
 import type { TabKey } from "@/types/schedule";
 
 const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
@@ -25,9 +27,60 @@ const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
 
 export function MedboardApp({ userName }: { userName: string }) {
   const { theme, setTheme } = useTheme();
-  const { tab, setTab, doneIds, onboardingDone } = useMedboardStore();
+  const { tab, setTab, doneIds, onboardingDone, activeTimer, setActiveTimer, toggleDone } = useMedboardStore();
+  const [now, setNow] = useState(Date.now());
   const ids = useMemo(() => allProgressIds(), []);
   const progress = ids.length ? Math.round((doneIds.length / ids.length) * 100) : 0;
+  const elapsedSeconds = activeTimer ? activeTimer.accumulatedSeconds + (!activeTimer.paused ? Math.max(0, Math.round((now - activeTimer.startedAt) / 1000)) : 0) : 0;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  function formatStudyTime(seconds: number) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}min`;
+  }
+
+  function pauseStudy() {
+    if (!activeTimer || activeTimer.paused) return;
+    setActiveTimer({ ...activeTimer, accumulatedSeconds: elapsedSeconds, paused: true });
+  }
+
+  function continueStudy() {
+    if (!activeTimer || !activeTimer.paused) return;
+    setActiveTimer({ ...activeTimer, startedAt: Date.now(), paused: false });
+  }
+
+  async function finishStudy() {
+    if (!activeTimer) return;
+    const seconds = Math.max(1, elapsedSeconds);
+    try {
+      await api("/api/productivity", {
+        method: "POST",
+        body: JSON.stringify({
+          horas: seconds / 3600,
+          rendimento: 100,
+          materia: activeTimer.area,
+          data: new Date(),
+          observacoes: `${activeTimer.source === "lesson" ? "aula" : "estudo"}:${activeTimer.title}${activeTimer.week ? ` · ${activeTimer.week}` : ""}`
+        })
+      });
+      if (activeTimer.lessonId && window.confirm("Deseja marcar esta aula como concluída?")) {
+        await api("/api/tasks", {
+          method: "POST",
+          body: JSON.stringify({ externalId: activeTimer.lessonId, titulo: activeTimer.title, data: activeTimer.date || new Date(), tipo: "AULA", materia: activeTimer.area, status: "DONE" })
+        });
+        if (!doneIds.includes(activeTimer.lessonId)) toggleDone(activeTimer.lessonId);
+      }
+      setActiveTimer(null);
+      toast.success("Tempo de estudo registrado");
+    } catch {
+      toast.error("Não consegui finalizar o estudo agora.");
+    }
+  }
 
   return (
     <div className="min-h-screen">
@@ -57,6 +110,25 @@ export function MedboardApp({ userName }: { userName: string }) {
       </aside>
 
       <main className="lg:pl-64">
+        {activeTimer && (
+          <div className="fixed bottom-4 right-4 z-50 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-red-200 bg-white p-4 shadow-2xl dark:border-red-400/30 dark:bg-slate-950">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <span className="text-xs font-black uppercase tracking-wider text-red-700 dark:text-red-300">Estudando</span>
+                <strong className="block truncate">{activeTimer.area} → {activeTimer.title}</strong>
+                <span className="mt-1 block font-mono text-2xl font-black">{formatStudyTime(elapsedSeconds)}</span>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                {activeTimer.paused ? (
+                  <button className="btn-secondary px-3" onClick={continueStudy}><Play size={16} /></button>
+                ) : (
+                  <button className="btn-secondary px-3" onClick={pauseStudy}><Pause size={16} /></button>
+                )}
+                <button className="btn-primary bg-red-700 px-3 hover:bg-red-800" onClick={finishStudy}><Check size={16} /></button>
+              </div>
+            </div>
+          </div>
+        )}
         <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 px-4 py-4 backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/85 lg:px-8">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>

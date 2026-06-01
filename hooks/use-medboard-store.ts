@@ -8,7 +8,17 @@ type Board = Record<string, Record<string, string>>;
 export type LessonQuestionState = Record<string, { done: boolean; feitas: number; acertos: number; erros: number; observacoes: string }>;
 export type ExtraStudy = { id: string; titulo: string; materia: string; data: string; horas: number };
 export type ReviewTarget = { source: "error-note" | "flashcard"; sourceId: string; materia?: string | null; taskId?: string; externalId?: string | null } | null;
-export type ActiveStudyTimer = { area: string; startedAt: number } | null;
+export type ActiveStudyTimer = {
+  area: string;
+  title: string;
+  startedAt: number;
+  accumulatedSeconds: number;
+  paused: boolean;
+  lessonId?: string;
+  week?: string;
+  date?: string;
+  source?: "lesson" | "extra" | "manual";
+} | null;
 
 type MedboardState = {
   tab: TabKey;

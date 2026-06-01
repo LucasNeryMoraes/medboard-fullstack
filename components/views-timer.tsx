@@ -63,6 +63,7 @@ export function TimerView() {
     return () => window.clearInterval(timer);
   }, []);
 
+  const activeElapsed = active ? active.accumulatedSeconds + (!active.paused ? Math.max(0, Math.round((now - active.startedAt) / 1000)) : 0) : 0;
   const todayRecords = useMemo(() => productivity.filter((item) => compactDate(item.data) === todayISO()), [productivity]);
   const totalToday = todayRecords.reduce((acc, item) => acc + Number(item.horas || 0), 0);
   const totalHours = productivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
@@ -75,7 +76,7 @@ export function TimerView() {
 
   async function stopTimer() {
     if (!active || saving) return;
-    const seconds = Math.max(0, Math.round((Date.now() - active.startedAt) / 1000));
+    const seconds = Math.max(0, active.accumulatedSeconds + (!active.paused ? Math.round((Date.now() - active.startedAt) / 1000) : 0));
     if (seconds < 1) {
       setActive(null);
       return;
@@ -117,7 +118,7 @@ export function TimerView() {
       toast.error("Pare o cronômetro atual antes de iniciar outra área.");
       return;
     }
-    setActive({ area, startedAt: Date.now() });
+    setActive({ area, title: area, startedAt: Date.now(), accumulatedSeconds: 0, paused: false, source: "manual" });
   }
 
   async function addHours() {
@@ -182,7 +183,7 @@ export function TimerView() {
           <div className="mt-6 grid gap-3 md:grid-cols-2">
             {areas.map((area) => {
               const running = active?.area === area;
-              const elapsed = running ? Math.round((now - active.startedAt) / 1000) : 0;
+              const elapsed = running ? activeElapsed : 0;
               const areaToday = byArea.find((item) => item.area === area)?.today || 0;
               return (
                 <div key={area} className={`rounded-2xl border p-4 transition ${running ? "border-red-300 bg-red-50 dark:border-red-400/30 dark:bg-red-500/10" : "border-violet-100 bg-slate-50 dark:border-violet-400/20 dark:bg-slate-900"}`}>

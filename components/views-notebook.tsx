@@ -30,8 +30,11 @@ type Flashcard = {
   tag: string | null;
   imagem: string | null;
   dueDate: string;
+  intervalDays: number;
+  repetitions: number;
   acertos: number;
   erros: number;
+  lastDifficulty: string | null;
   createdAt: string;
 };
 
@@ -83,6 +86,7 @@ export function NotebookView() {
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [noteForm, setNoteForm] = useState(emptyNote);
   const [cardForm, setCardForm] = useState(emptyCard);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
 
   const [noteArea, setNoteArea] = useState("Todas as matérias");
   const [noteMode, setNoteMode] = useState("Revisões de hoje/atrasadas");
@@ -219,20 +223,23 @@ export function NotebookView() {
       toast.error("Preencha pergunta e resposta do flashcard.");
       return;
     }
-    const saved = await api<Flashcard>("/api/flashcards", {
-      method: "POST",
+    const saved = await api<Flashcard>(editingCardId ? `/api/flashcards/${editingCardId}` : "/api/flashcards", {
+      method: editingCardId ? "PATCH" : "POST",
       body: JSON.stringify({
         pergunta: cardForm.pergunta,
         resposta: cardForm.resposta,
         materia: cardForm.materia,
         deck: cardForm.materia,
         tag: cardForm.tag,
-        imagem: cardForm.imagem || undefined
+        imagem: cardForm.imagem || undefined,
+        dueDate: editingCardId ? undefined : nextDate(1),
+        intervalDays: editingCardId ? undefined : 1
       })
     });
-    setFlashcards((current) => [saved, ...current]);
+    setFlashcards((current) => editingCardId ? current.map((card) => card.id === saved.id ? saved : card) : [saved, ...current]);
     setCardForm({ ...emptyCard, materia: cardForm.materia });
-    toast.success("Flashcard salvo");
+    setEditingCardId(null);
+    toast.success(editingCardId ? "Flashcard atualizado" : "Flashcard salvo");
   }
 
   async function removeNote(id: string) {
@@ -365,6 +372,18 @@ export function NotebookView() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function editFlashcard(card: Flashcard) {
+    setEditingCardId(card.id);
+    setCardForm({
+      materia: card.materia || card.deck || areas[0],
+      tag: card.tag || "",
+      pergunta: card.pergunta,
+      resposta: card.resposta,
+      imagem: card.imagem || ""
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   return (
     <div className="grid gap-6">
       <section className="grid gap-6 xl:grid-cols-[1fr_.9fr]">
@@ -393,7 +412,10 @@ export function NotebookView() {
             <textarea className="input min-h-24" placeholder="Pergunta do flashcard" value={cardForm.pergunta} onChange={(event) => setCardForm({ ...cardForm, pergunta: event.target.value })} />
             <textarea className="input min-h-24" placeholder="Resposta e explicação" value={cardForm.resposta} onChange={(event) => setCardForm({ ...cardForm, resposta: event.target.value })} />
             <ImageUpload label="Imagem do flashcard (opcional)" onImage={(imagem) => setCardForm({ ...cardForm, imagem })} />
-            <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={saveFlashcard}>Salvar flashcard</button>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={saveFlashcard}>{editingCardId ? "Atualizar flashcard" : "Salvar flashcard"}</button>
+              {editingCardId && <button className="btn-secondary" onClick={() => { setEditingCardId(null); setCardForm(emptyCard); }}>Cancelar edição</button>}
+            </div>
           </div>
         </article>
       </section>
@@ -480,7 +502,10 @@ export function NotebookView() {
 
       <section className="grid gap-6 xl:grid-cols-2">
         <ListPanel title="Erros cadastrados" items={notes.map((note) => ({ id: note.id, title: note.tema, detail: `${note.materia || "Sem matéria"} · próxima revisão ${new Date(note.data || note.createdAt).toLocaleDateString("pt-BR")}` }))} onDelete={removeNote} />
-        <ListPanel title="Flashcards cadastrados" items={flashcards.map((card) => ({ id: card.id, title: card.pergunta, detail: `${card.materia || "Sem matéria"} · próxima revisão ${new Date(card.dueDate || card.createdAt).toLocaleDateString("pt-BR")}` }))} onDelete={removeFlashcard} />
+        <ListPanel title="Flashcards cadastrados" items={flashcards.map((card) => ({ id: card.id, title: card.pergunta, detail: `${card.materia || "Sem matéria"} · próxima revisão ${new Date(card.dueDate || card.createdAt).toLocaleDateString("pt-BR")}` }))} onDelete={removeFlashcard} onEdit={(id) => {
+          const card = flashcards.find((item) => item.id === id);
+          if (card) editFlashcard(card);
+        }} />
       </section>
     </div>
   );
@@ -557,7 +582,7 @@ function StudyCard({ title, area, setArea, mode, setMode, modes, onShuffle, curr
   );
 }
 
-function ListPanel({ title, items, onDelete }: { title: string; items: { id: string; title: string; detail: string }[]; onDelete: (id: string) => void }) {
+function ListPanel({ title, items, onDelete, onEdit }: { title: string; items: { id: string; title: string; detail: string }[]; onDelete: (id: string) => void; onEdit?: (id: string) => void }) {
   return (
     <article className="card p-5">
       <h2 className="text-lg font-black">{title}</h2>
@@ -565,7 +590,10 @@ function ListPanel({ title, items, onDelete }: { title: string; items: { id: str
         {items.slice(0, 12).map((item) => (
           <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
             <span><strong>{item.title}</strong><span className="block text-slate-500">{item.detail}</span></span>
-            <button className="btn-secondary px-3" onClick={() => onDelete(item.id)}><Trash2 size={16} /></button>
+            <span className="flex gap-2">
+              {onEdit && <button className="btn-secondary px-3" onClick={() => onEdit(item.id)}>Editar</button>}
+              <button className="btn-secondary px-3" onClick={() => onDelete(item.id)}><Trash2 size={16} /></button>
+            </span>
           </div>
         ))}
         {!items.length && <Empty text="Nada cadastrado ainda." />}

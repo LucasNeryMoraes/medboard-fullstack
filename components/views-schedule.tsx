@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Circle, RotateCcw, Search } from "lucide-react";
+import { Check, Circle, Pause, Play, RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import type { ExtraStudy } from "@/hooks/use-medboard-store";
@@ -168,6 +168,54 @@ export function ScheduleView() {
     store.setReviewTarget({ source, sourceId, materia: task.materia, taskId: task.id, externalId: task.externalId });
     store.setTab("caderno");
     toast.success("Abri o caderno para responder essa revisao.");
+  }
+
+  function startLessonStudy(lesson: { id: string; disciplina: string; aula: string; semana: string; data: string }) {
+    if (store.activeTimer && store.activeTimer.lessonId !== lesson.id) {
+      toast.error("Finalize ou pause o estudo atual antes de iniciar outra aula.");
+      return;
+    }
+    store.setActiveTimer({
+      area: lesson.disciplina,
+      title: lesson.aula,
+      lessonId: lesson.id,
+      week: lesson.semana,
+      date: lesson.data,
+      source: "lesson",
+      startedAt: Date.now(),
+      accumulatedSeconds: store.activeTimer?.lessonId === lesson.id ? store.activeTimer.accumulatedSeconds : 0,
+      paused: false
+    });
+    toast.success("Cronômetro iniciado para esta aula.");
+  }
+
+  function pauseLessonStudy() {
+    const active = store.activeTimer;
+    if (!active || active.paused) return;
+    const elapsed = active.accumulatedSeconds + Math.max(0, Math.round((Date.now() - active.startedAt) / 1000));
+    store.setActiveTimer({ ...active, accumulatedSeconds: elapsed, paused: true });
+  }
+
+  async function finishLessonStudy(lesson: { id: string; disciplina: string; aula: string; data: string }) {
+    const active = store.activeTimer;
+    if (!active || active.lessonId !== lesson.id) {
+      toast.error("Inicie o estudo desta aula antes de finalizar.");
+      return;
+    }
+    const seconds = active.accumulatedSeconds + (!active.paused ? Math.max(0, Math.round((Date.now() - active.startedAt) / 1000)) : 0);
+    try {
+      await api("/api/productivity", {
+        method: "POST",
+        body: JSON.stringify({ horas: Math.max(1, seconds) / 3600, rendimento: 100, materia: lesson.disciplina, data: new Date(), observacoes: `aula:${lesson.aula}` })
+      });
+      store.setActiveTimer(null);
+      toast.success("Tempo da aula salvo.");
+      if (window.confirm("Deseja marcar esta aula como concluída?")) {
+        await syncTask(lesson.id, true, { titulo: lesson.aula, data: lesson.data, tipo: "AULA", materia: lesson.disciplina });
+      }
+    } catch {
+      toast.error("Não consegui salvar o tempo estudado.");
+    }
   }
 
   async function addExtraStudy() {
@@ -370,6 +418,7 @@ export function ScheduleView() {
                     ...row.aulas.map((lesson) => {
                       const priority = inferPriority(lesson);
                       const done = store.doneIds.includes(lesson.id);
+                      const studying = store.activeTimer?.lessonId === lesson.id;
                       const q = store.lessonQuestions[lesson.id] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
                       return (
                         <div key={lesson.id} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
@@ -388,6 +437,11 @@ export function ScheduleView() {
                               <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">Aula</span>
                               <p className="mt-2 text-slate-500">{lesson.horario}</p>
                             </div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button className="btn-secondary" onClick={() => startLessonStudy(lesson)}><Play size={16} /> {studying && store.activeTimer?.paused ? "Continuar" : "Iniciar Estudo"}</button>
+                            <button className="btn-secondary" disabled={!studying || !!store.activeTimer?.paused} onClick={pauseLessonStudy}><Pause size={16} /> Pausar</button>
+                            <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={() => finishLessonStudy(lesson)}><Check size={16} /> Finalizar Aula</button>
                           </div>
                           <div className="mt-3 rounded-2xl border border-violet-200 bg-violet-50/70 p-4 dark:border-violet-400/20 dark:bg-violet-500/10">
                             <label className="flex items-center gap-2 text-sm font-black text-violet-950 dark:text-violet-100">
