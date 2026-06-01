@@ -23,9 +23,12 @@ export const taskSchema = z.object({
 
 export const performanceSchema = z.object({
   materia: z.string().min(1),
+  questoes: z.coerce.number().int().min(0).optional(),
   acertos: z.coerce.number().int().min(0),
   erros: z.coerce.number().int().min(0),
   examName: z.string().optional().nullable(),
+  instituicao: z.string().optional().nullable(),
+  observacoes: z.string().optional().nullable(),
   data: z.coerce.date().optional()
 });
 

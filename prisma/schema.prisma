@@ -85,10 +85,13 @@ model Performance {
   id         String   @id @default(cuid())
   userId     String
   materia    String
+  questoes   Int      @default(0)
   acertos    Int
   erros      Int
   percentual Float
   examName   String?
+  instituicao String?
+  observacoes String?
   data       DateTime @default(now())
   createdAt  DateTime @default(now())
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)

@@ -11,7 +11,7 @@ type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; a
 type ErrorNote = { id: string; tema: string; materia: string | null; erro: string; revisao: string | null; flashcard: string | null; dificuldade: string | null; data: string; createdAt: string };
 type Flashcard = { id: string; pergunta: string; tag: string | null; materia: string | null; deck: string | null; dueDate: string; updatedAt?: string; acertos: number; erros: number; lastDifficulty?: string | null };
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
-type Performance = { id: string; materia: string; acertos: number; erros: number; percentual: number; examName: string | null; data: string; createdAt: string };
+type Performance = { id: string; materia: string; questoes?: number; acertos: number; erros: number; percentual: number; examName: string | null; instituicao?: string | null; observacoes?: string | null; data: string; createdAt: string };
 type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 
 const today = todayISO();
@@ -47,6 +47,10 @@ function inferSystem(text: string) {
     ["Pediatria", ["pedi", "criança", "neonato", "vacina"]]
   ];
   return entries.find(([, words]) => words.some((word) => normalized.includes(word)))?.[0] || "Sem sistema definido";
+}
+
+function performanceTotal(item: Pick<Performance, "questoes" | "acertos" | "erros">) {
+  return Number(item.questoes || 0) || Number(item.acertos || 0) + Number(item.erros || 0);
 }
 
 export function DashboardView() {
@@ -129,8 +133,9 @@ export function DashboardView() {
     const simStats = performances.filter((item) => item.materia === area).reduce((acc, item) => {
       acc.acertos += item.acertos;
       acc.erros += item.erros;
+      acc.questoes += performanceTotal(item);
       return acc;
-    }, { acertos: 0, erros: 0 });
+    }, { acertos: 0, erros: 0, questoes: 0 });
     const cardStats = flashcards.filter((card) => card.materia === area || card.deck === area).reduce((acc, card) => {
       acc.acertos += Number(card.acertos || 0);
       acc.erros += Number(card.erros || 0);
@@ -138,7 +143,7 @@ export function DashboardView() {
     }, { acertos: 0, erros: 0 });
     const acertos = questionStats.acertos + extraQuestionStats.acertos + simStats.acertos + cardStats.acertos;
     const erros = questionStats.erros + extraQuestionStats.erros + simStats.erros + cardStats.erros;
-    const total = acertos + erros;
+    const total = Math.max(questionStats.feitas + extraQuestionStats.feitas + simStats.questoes + cardStats.acertos + cardStats.erros, acertos + erros);
     return { area, acertos, erros, total, feitas: questionStats.feitas + extraQuestionStats.feitas, percentual: total ? Math.round((acertos / total) * 100) : 0 };
   }), [extraStudyTasks, flashcards, lessons, performances, questionByLesson]);
 
@@ -223,6 +228,7 @@ export function DashboardView() {
     { level: "red", text: `${overdueLessons.length} aulas atrasadas.`, active: overdueLessons.length > 0 },
     { level: "red", text: `${overdueReviews.length} revisões atrasadas.`, active: overdueReviews.length > 0 },
     { level: "yellow", text: `Seu pior desempenho atual é ${worstArea?.area} (${worstArea?.percentual}%).`, active: !!worstArea },
+    { level: "yellow", text: `Prioridade de revisão: ${worstArea?.area}.`, active: !!worstArea && worstArea.percentual < 65 },
     { level: "yellow", text: `${recurringErrors.length} assuntos recorrentes no caderno de erros.`, active: recurringErrors.length > 0 },
     { level: "green", text: `Você estudou ${formatHours(hoursToday)} hoje.`, active: hoursToday > 0 }
   ];
@@ -242,6 +248,7 @@ export function DashboardView() {
     { tone: "red", text: `${flashOverdue.length} flashcards atrasados.`, active: flashOverdue.length > 0 },
     { tone: "red", text: `${overdueLessons.length} aulas atrasadas.`, active: overdueLessons.length > 0 },
     { tone: "yellow", text: `${scheduledExams.length} simulados programados próximos.`, active: scheduledExams.length > 0 },
+    { tone: "yellow", text: `Prioridade de revisão: ${worstArea?.area} abaixo de 65%.`, active: !!worstArea && worstArea.percentual < 65 },
     { tone: "yellow", text: `${recurringErrors.length} erros recorrentes sem consolidação.`, active: recurringErrors.length > 0 },
     { tone: "green", text: `Meta semanal quase concluída: ${formatHours(hoursWeek)} registrados.`, active: hoursWeek >= 20 }
   ].filter((item) => item.active);

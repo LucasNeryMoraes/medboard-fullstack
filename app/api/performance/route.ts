@@ -17,9 +17,10 @@ export async function POST(req: NextRequest) {
   try {
     const userId = await requireUserId();
     const body = performanceSchema.parse(await req.json());
-    const total = body.acertos + body.erros;
-    const percentual = total ? Math.round((body.acertos / total) * 1000) / 10 : 0;
-    return ok(await prisma.performance.create({ data: { ...body, percentual, userId } }), { status: 201 });
+    const questoes = body.questoes || body.acertos + body.erros;
+    const erros = body.erros || Math.max(0, questoes - body.acertos);
+    const percentual = questoes ? Math.round((body.acertos / questoes) * 1000) / 10 : 0;
+    return ok(await prisma.performance.create({ data: { ...body, questoes, erros, percentual, userId } }), { status: 201 });
   } catch (error) {
     return fail(error);
   }
