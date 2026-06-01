@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { ok, fail } from "@/lib/api-response";
 import { prisma } from "@/lib/prisma";
 import { sanitizeText } from "@/lib/security";
@@ -23,7 +24,14 @@ export async function POST(req: NextRequest) {
         ...body,
         userId,
         tema: sanitizeText(body.tema),
-        erro: sanitizeText(body.erro)
+        erro: sanitizeText(body.erro),
+        revisao: body.revisao ? sanitizeText(body.revisao) : null,
+        resposta: body.resposta ? sanitizeText(body.resposta) : null,
+        flashcard: body.flashcard ? sanitizeText(body.flashcard) : null,
+        respostaMarcada: body.respostaMarcada ? sanitizeText(body.respostaMarcada) : null,
+        respostaCorreta: body.respostaCorreta ? sanitizeText(body.respostaCorreta) : null,
+        explicacao: body.explicacao ? sanitizeText(body.explicacao) : null,
+        alternativas: (body.alternativas ?? undefined) as Prisma.InputJsonValue | undefined
       }
     });
     return ok(note, { status: 201 });

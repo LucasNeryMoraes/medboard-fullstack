@@ -35,6 +35,14 @@ export const errorNotebookSchema = z.object({
   revisao: z.string().optional().nullable(),
   flashcard: z.string().optional().nullable(),
   resposta: z.string().optional().nullable(),
+  alternativas: z.array(z.object({
+    letra: z.string().max(4),
+    texto: z.string()
+  })).optional().nullable(),
+  respostaMarcada: z.string().optional().nullable(),
+  respostaCorreta: z.string().optional().nullable(),
+  explicacao: z.string().optional().nullable(),
+  statusRevisao: z.enum(["NAO_REVISADA", "ACERTEI_DEPOIS", "ERREI_NOVAMENTE"]).optional().nullable(),
   materia: z.string().optional().nullable(),
   imagem: z.string().optional().nullable(),
   dificuldade: z.string().optional().nullable(),

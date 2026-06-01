@@ -104,6 +104,11 @@ model ErrorNotebook {
   revisao   String?
   flashcard String?
   resposta  String?
+  alternativas Json?
+  respostaMarcada String?
+  respostaCorreta String?
+  explicacao String?
+  statusRevisao String?
   materia   String?
   imagem    String?
   dificuldade String?
