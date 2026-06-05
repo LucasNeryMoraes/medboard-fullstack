@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpenCheck, Database, FileQuestion, ImagePlus, Pencil, Plus, RotateCcw, Shuffle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
+import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { areas } from "@/utils/schedule";
 
 type Alternative = { letra: string; texto: string };
@@ -132,6 +133,10 @@ async function fileToDataUrl(file?: File) {
 export function NotebookView() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
+  const flashcardReviewRequest = useMedboardStore((state) => state.flashcardReviewRequest);
+  const flashcardReturnTab = useMedboardStore((state) => state.flashcardReturnTab);
+  const setTab = useMedboardStore((state) => state.setTab);
+  const clearFlashcardReturn = useMedboardStore((state) => state.clearFlashcardReturn);
   const [section, setSection] = useState<NotebookSection>("overview");
   const [questionForm, setQuestionForm] = useState(emptyQuestion);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -143,6 +148,7 @@ export function NotebookView() {
   const [flashIndex, setFlashIndex] = useState(0);
   const [showFlashAnswer, setShowFlashAnswer] = useState(false);
   const [showFlashList, setShowFlashList] = useState(false);
+  const handledFlashRequest = useRef(0);
   const [manageArea, setManageArea] = useState("Todas");
   const [reviewArea, setReviewArea] = useState("Todas");
   const [reviewSession, setReviewSession] = useState<Note[]>([]);
@@ -197,6 +203,19 @@ export function NotebookView() {
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {})).map(([system, total]) => ({ system, total })).sort((a, b) => b.total - a.total), [flashcards]);
+
+  useEffect(() => {
+    if (!flashcardReviewRequest || !flashcards.length) return;
+    if (handledFlashRequest.current === flashcardReviewRequest) return;
+    handledFlashRequest.current = flashcardReviewRequest;
+    const due = flashcards.filter((card) => dueFlashcard(card));
+    setFlashArea("Todas as materias");
+    setFlashMode("Revisoes de hoje/atrasadas");
+    setFlashSession(shuffle(due));
+    setFlashIndex(0);
+    setShowFlashAnswer(false);
+    if (!due.length) toast.success("Nenhum flashcard pendente agora.");
+  }, [flashcardReviewRequest, flashcards]);
 
   function resetForm(materia = questionForm.materia) {
     setQuestionForm({ ...emptyQuestion, materia });
@@ -455,7 +474,15 @@ export function NotebookView() {
     setFlashcards((current) => current.map((card) => card.id === updated.id ? updated : card));
     setFlashSession((current) => current.map((card) => card.id === updated.id ? updated : card));
     setShowFlashAnswer(false);
-    setFlashIndex((current) => Math.min(current + 1, Math.max(flashSession.length - 1, 0)));
+    if (flashIndex >= flashSession.length - 1) {
+      if (flashcardReturnTab) {
+        setTab(flashcardReturnTab);
+        clearFlashcardReturn();
+      }
+      toast.success("Revisao de flashcards concluida.");
+      return;
+    }
+    setFlashIndex((current) => current + 1);
   }
 
   return (

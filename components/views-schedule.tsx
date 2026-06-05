@@ -11,6 +11,7 @@ import { allLessons, allProgressIds, areas, inferPriority, isSaturday, normalize
 type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type ProductivityRecord = { id: string; materia: string | null; horas: number; data: string; observacoes: string | null };
+type FlashcardRecord = { id: string; dueDate: string; updatedAt?: string; lastDifficulty?: string | null };
 
 const dayLabels = [
   ["segunda", "Segunda"],
@@ -40,11 +41,16 @@ function formatHours(value: number) {
   return minutes ? `${hours}h${String(minutes).padStart(2, "0")}` : `${hours}h`;
 }
 
+function compactDate(value: string | Date) {
+  return new Date(value).toLocaleDateString("sv-SE");
+}
+
 export function ScheduleView() {
   const store = useMedboardStore();
   const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
   const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "", observacoes: "", feitas: "", acertos: "", erros: "" });
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
   const selectedWeek = store.week || schedule.rows.find((row) => row.data === todayISO())?.semana || schedule.semanas[0];
   const totalProgressIds = useMemo(() => allProgressIds(), []);
   const extraProgressIds = useMemo(() => new Set(store.extraStudies.map((study) => study.id)), [store.extraStudies]);
@@ -61,13 +67,15 @@ export function ScheduleView() {
     let ignore = false;
     async function hydrate() {
       try {
-        const [tasks, questions, productivity] = await Promise.all([
+        const [tasks, questions, productivity, flashcards] = await Promise.all([
           api<TaskRecord[]>("/api/tasks"),
           api<LessonQuestionRecord[]>("/api/lesson-questions"),
-          api<ProductivityRecord[]>("/api/productivity")
+          api<ProductivityRecord[]>("/api/productivity"),
+          api<FlashcardRecord[]>("/api/flashcards")
         ]);
         if (ignore) return;
         setTasks(tasks);
+        setFlashcards(flashcards);
         store.setDoneIds(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
         store.setLessonQuestions(Object.fromEntries(questions.map((item) => [item.lessonId, {
           done: item.done,
@@ -134,6 +142,7 @@ export function ScheduleView() {
     tasks
       .filter((task) => task.tipo === "REVISAO")
       .filter((task) => task.externalId?.startsWith("review-"))
+      .filter((task) => task.externalId && !task.externalId.startsWith("review-flashcard-"))
       .forEach((task) => {
         const date = toDateInput(task.data);
         map.set(date, [...(map.get(date) || []), task]);
@@ -153,6 +162,23 @@ export function ScheduleView() {
     const today = parseISODate(todayISO());
     return allLessons().filter((lesson) => parseISODate(lesson.data) < today && !store.doneIds.includes(lesson.id));
   }, [store.doneIds]);
+
+  function flashcardSummaryForDate(date: string) {
+    const today = todayISO();
+    const completedToday = flashcards.filter((card) => card.updatedAt && compactDate(card.updatedAt) === today && card.lastDifficulty).length;
+    if (date === today) {
+      const todayCards = flashcards.filter((card) => compactDate(card.dueDate) === today && !(card.updatedAt && compactDate(card.updatedAt) === today && card.lastDifficulty)).length;
+      const overdue = flashcards.filter((card) => compactDate(card.dueDate) < today && !(card.updatedAt && compactDate(card.updatedAt) === today && card.lastDifficulty)).length;
+      const total = todayCards + overdue + completedToday;
+      return { todayCards, overdue, completed: completedToday, total, estimatedMinutes: Math.max(5, Math.ceil(total * 0.75)), pct: total ? Math.round((completedToday / total) * 100) : 0 };
+    }
+    const todayCards = flashcards.filter((card) => compactDate(card.dueDate) === date).length;
+    return { todayCards, overdue: 0, completed: 0, total: todayCards, estimatedMinutes: Math.max(5, Math.ceil(todayCards * 0.75)), pct: 0 };
+  }
+
+  function reviewFlashcards() {
+    store.requestFlashcardReview("cronograma");
+  }
 
   async function syncTask(id: string, checked: boolean, payload: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia?: string; descricao?: string; metadata?: unknown }) {
     store.toggleDone(id);
@@ -444,6 +470,7 @@ export function ScheduleView() {
               .filter((study) => !store.discipline || study.materia === store.discipline)
               .filter(() => !store.type || store.type === "livre" || store.type === "aula")
               .filter((study) => !q || normalizeText(`${study.titulo} ${study.materia} ${study.observacoes || ""}`).includes(q));
+            const flashSummary = flashcardSummaryForDate(date);
             return (
               <article key={date} className="card overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-violet-100 p-4 dark:border-white/10">
@@ -455,6 +482,7 @@ export function ScheduleView() {
                     {isToday && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">Hoje</span>}
                     {!!lessonCount && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">{lessonCount} aula(s)</span>}
                     {!!extraStudiesForDate.length && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">{extraStudiesForDate.length} extra(s)</span>}
+                    {!!flashSummary.total && <span className="badge bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-white">{flashSummary.total} card(s)</span>}
                   </div>
                 </div>
                 <div className="grid gap-3 p-4">
@@ -568,6 +596,23 @@ export function ScheduleView() {
                     ) : null,
                     row.domingo ? <div key={`livre-${row.row}`} className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500 dark:border-white/10">Domingo livre - descanso, lazer e organizacao leve.</div> : null
                   ])}
+                  {!!flashSummary.total && (!store.type || store.type === "revisao") && (
+                    <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-400/20 dark:bg-indigo-500/10">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <h4 className="text-base font-black">{isToday ? "Flashcards do dia" : "Flashcards para revisar"}</h4>
+                          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                            Hoje: {flashSummary.todayCards} cards · Atrasados: {flashSummary.overdue} cards · Total: {flashSummary.total} cards
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">Tempo estimado: {flashSummary.estimatedMinutes} min · Progresso: {flashSummary.completed}/{flashSummary.total} concluídos ({flashSummary.pct}%)</p>
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white dark:bg-slate-950">
+                            <div className="h-full rounded-full bg-indigo-600" style={{ width: `${flashSummary.pct}%` }} />
+                          </div>
+                        </div>
+                        <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={reviewFlashcards}>Revisar Flashcards</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </article>
             );

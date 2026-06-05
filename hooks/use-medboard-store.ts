@@ -31,10 +31,14 @@ type MedboardState = {
   lessonQuestions: LessonQuestionState;
   extraStudies: ExtraStudy[];
   reviewTarget: ReviewTarget;
+  flashcardReviewRequest: number;
+  flashcardReturnTab: TabKey | null;
   activeTimer: ActiveStudyTimer;
   onboardingDone: boolean;
   setTab: (tab: TabKey) => void;
   setReviewTarget: (target: ReviewTarget) => void;
+  requestFlashcardReview: (returnTab?: TabKey | null) => void;
+  clearFlashcardReturn: () => void;
   setActiveTimer: (timer: ActiveStudyTimer) => void;
   setFilter: (key: "search" | "week" | "discipline" | "type", value: string) => void;
   toggleDone: (id: string) => void;
@@ -66,10 +70,14 @@ export const useMedboardStore = create<MedboardState>()(
       lessonQuestions: {},
       extraStudies: [],
       reviewTarget: null,
+      flashcardReviewRequest: 0,
+      flashcardReturnTab: null,
       activeTimer: null,
       onboardingDone: false,
       setTab: (tab) => set({ tab }),
       setReviewTarget: (reviewTarget) => set({ reviewTarget }),
+      requestFlashcardReview: (flashcardReturnTab = null) => set((state) => ({ flashcardReviewRequest: state.flashcardReviewRequest + 1, flashcardReturnTab, tab: "caderno" })),
+      clearFlashcardReturn: () => set({ flashcardReturnTab: null }),
       setActiveTimer: (activeTimer) => set({ activeTimer }),
       setFilter: (key, value) => set({ [key]: value }),
       toggleDone: (id) =>

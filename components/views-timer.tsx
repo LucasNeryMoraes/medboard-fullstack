@@ -8,6 +8,7 @@ import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { areas, todayISO } from "@/utils/schedule";
 
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
+type FlashcardRecord = { id: string; dueDate: string; updatedAt?: string; lastDifficulty?: string | null };
 
 const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
 
@@ -41,17 +42,20 @@ function hoursToClock(value: number) {
 export function TimerView() {
   const active = useMedboardStore((state) => state.activeTimer);
   const setActive = useMedboardStore((state) => state.setActiveTimer);
+  const requestFlashcardReview = useMedboardStore((state) => state.requestFlashcardReview);
   const [now, setNow] = useState(Date.now());
   const [productivity, setProductivity] = useState<Productivity[]>([]);
+  const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
   const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], horas: "", observacoes: "" });
   const [editingHours, setEditingHours] = useState<Record<string, string>>({});
   const [editingArea, setEditingArea] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api<Productivity[]>("/api/productivity")
-      .then((items) => {
+    Promise.all([api<Productivity[]>("/api/productivity"), api<FlashcardRecord[]>("/api/flashcards")])
+      .then(([items, cardItems]) => {
         setProductivity(items);
+        setFlashcards(cardItems);
         setEditingHours(Object.fromEntries(items.map((item) => [item.id, hoursToClock(item.horas)])));
         setEditingArea(Object.fromEntries(items.map((item) => [item.id, item.materia || areas[0]])));
       })
@@ -65,6 +69,9 @@ export function TimerView() {
 
   const activeElapsed = active ? active.accumulatedSeconds + (!active.paused ? Math.max(0, Math.round((now - active.startedAt) / 1000)) : 0) : 0;
   const todayRecords = useMemo(() => productivity.filter((item) => compactDate(item.data) === todayISO()), [productivity]);
+  const completedFlashToday = flashcards.filter((card) => card.updatedAt && compactDate(card.updatedAt) === todayISO() && card.lastDifficulty).length;
+  const flashToday = flashcards.filter((card) => compactDate(card.dueDate) === todayISO() && !(card.updatedAt && compactDate(card.updatedAt) === todayISO() && card.lastDifficulty)).length;
+  const flashOverdue = flashcards.filter((card) => compactDate(card.dueDate) < todayISO() && !(card.updatedAt && compactDate(card.updatedAt) === todayISO() && card.lastDifficulty)).length;
   const totalToday = todayRecords.reduce((acc, item) => acc + Number(item.horas || 0), 0);
   const totalHours = productivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
   const activeDays = new Set(productivity.map((item) => compactDate(item.data))).size;
@@ -210,6 +217,13 @@ export function TimerView() {
         <article className="card p-5">
           <h2 className="text-lg font-black">Resumo do dia</h2>
           <div className="mt-4 grid gap-2">
+            {(flashToday + flashOverdue + completedFlashToday) > 0 && (
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm dark:border-indigo-400/20 dark:bg-indigo-500/10">
+                <strong className="block">Flashcards do dia</strong>
+                <span className="mt-1 block text-slate-500">{flashToday} programados · {flashOverdue} atrasados</span>
+                <button className="btn-primary mt-3 w-full bg-red-700 hover:bg-red-800" onClick={() => requestFlashcardReview("cronometro")}>Revisar agora</button>
+              </div>
+            )}
             {byArea.filter((item) => item.today > 0).map((item) => (
               <div key={item.area} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
                 <span>{item.area}</span>

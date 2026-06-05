@@ -170,11 +170,12 @@ export function DashboardView() {
   }, {})).map(([system, hours]) => ({ system, hours })).sort((a, b) => b.hours - a.hours).slice(0, 8);
 
   const flashDue = flashcards.filter((card) => compactDate(card.dueDate) <= today);
-  const flashOverdue = flashcards.filter((card) => compactDate(card.dueDate) < today);
-  const flashReviewedToday = flashcards.filter((card) => card.updatedAt && compactDate(card.updatedAt) === today);
-  const flashHits = flashcards.reduce((acc, item) => acc + Number(item.acertos || 0), 0);
-  const flashMisses = flashcards.reduce((acc, item) => acc + Number(item.erros || 0), 0);
-  const difficultCards = flashcards.filter((card) => ["Muito difícil", "Difícil", "Muito difÃ­cil", "DifÃ­cil"].includes(card.lastDifficulty || "")).length;
+  const flashReviewedToday = flashcards.filter((card) => card.updatedAt && compactDate(card.updatedAt) === today && card.lastDifficulty);
+  const flashTodayPending = flashcards.filter((card) => compactDate(card.dueDate) === today && !(card.updatedAt && compactDate(card.updatedAt) === today && card.lastDifficulty));
+  const flashOverdue = flashcards.filter((card) => compactDate(card.dueDate) < today && !(card.updatedAt && compactDate(card.updatedAt) === today && card.lastDifficulty));
+  const flashScheduledToday = flashTodayPending.length + flashReviewedToday.length;
+  const flashCompletionTotal = flashScheduledToday + flashOverdue.length;
+  const flashCompletionRate = flashCompletionTotal ? Math.round((flashReviewedToday.length / flashCompletionTotal) * 100) : 0;
 
   const recurringErrors = Object.entries(errors.reduce<Record<string, number>>((acc, item) => {
     const key = `${item.tema}${item.materia ? ` · ${item.materia}` : ""}`;
@@ -351,13 +352,10 @@ export function DashboardView() {
         <article className="card p-5">
           <h2 className="text-lg font-black">Flashcards</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Metric title="Totais" value={flashcards.length} />
-            <Metric title="Pendentes" value={flashDue.length} />
+            <Metric title="Previstos hoje" value={flashScheduledToday} />
+            <Metric title="Concluídos hoje" value={flashReviewedToday.length} />
             <Metric title="Atrasados" value={flashOverdue.length} />
-            <Metric title="Revisados hoje" value={flashReviewedToday.length} />
-            <Metric title="Taxa de acerto" value={`${flashHits + flashMisses ? Math.round((flashHits / (flashHits + flashMisses)) * 100) : 0}%`} />
-            <Metric title="Difíceis" value={difficultCards} />
-            <Metric title="Marcados como erro" value={flashcards.filter((card) => Number(card.erros || 0) > 0).length} />
+            <Metric title="Taxa de conclusão" value={`${flashCompletionRate}%`} />
           </div>
         </article>
 
