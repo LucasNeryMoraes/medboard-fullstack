@@ -46,4 +46,4 @@ export type ScheduleData = {
   };
 };
 
-export type TabKey = "dashboard" | "cronograma" | "cronometro" | "simulados" | "caderno";
+export type TabKey = "dashboard" | "hoje" | "cronograma" | "cronometro" | "simulados" | "caderno";

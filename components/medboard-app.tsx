@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { signOut } from "next-auth/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTheme } from "next-themes";
-import { BarChart3, CalendarDays, Check, Clock3, LogOut, Moon, NotebookTabs, Pause, Play, Search, Sun, Trophy } from "lucide-react";
+import { BarChart3, CalendarCheck2, CalendarDays, Check, Clock3, LogOut, Moon, NotebookTabs, Pause, Play, Search, Sun, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { DashboardView } from "@/components/views-dashboard";
+import { TodayView } from "@/components/views-today";
 import { ScheduleView } from "@/components/views-schedule";
 import { TimerView } from "@/components/views-timer";
 import { NotebookView } from "@/components/views-notebook";
@@ -19,6 +20,7 @@ import type { TabKey } from "@/types/schedule";
 
 const tabs: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: "dashboard", label: "Dashboard", icon: BarChart3 },
+  { key: "hoje", label: "Hoje", icon: CalendarCheck2 },
   { key: "cronograma", label: "Cronograma", icon: CalendarDays },
   { key: "cronometro", label: "Cronômetro", icon: Clock3 },
   { key: "simulados", label: "Simulados", icon: Trophy },
@@ -153,6 +155,7 @@ export function MedboardApp({ userName }: { userName: string }) {
           <AnimatePresence mode="wait">
             <motion.div key={tab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.18 }}>
               {tab === "dashboard" && <DashboardView />}
+              {tab === "hoje" && <TodayView />}
               {tab === "cronograma" && <ScheduleView />}
               {tab === "cronometro" && <TimerView />}
               {tab === "simulados" && <PerformanceView />}
