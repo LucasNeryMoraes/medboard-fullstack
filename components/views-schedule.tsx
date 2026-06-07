@@ -45,8 +45,13 @@ function compactDate(value: string | Date) {
   return new Date(value).toLocaleDateString("sv-SE");
 }
 
-export function ScheduleView() {
+type ScheduleViewProps = {
+  mode?: "full" | "today";
+};
+
+export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
   const store = useMedboardStore();
+  const todayMode = mode === "today";
   const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
   const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "", observacoes: "", feitas: "", acertos: "", erros: "" });
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
@@ -123,13 +128,14 @@ export function ScheduleView() {
   const visibleRows = useMemo(() => {
     const q = normalizeText(store.search);
     return schedule.rows.filter((row) => {
+      if (todayMode) return row.data === todayISO();
       if (store.week && row.semana !== store.week) return false;
       if (store.discipline && row.disciplina !== store.discipline) return false;
       if (store.type && row.tipo !== store.type && !(store.type === "simulado" && isSaturday(row.data))) return false;
       if (!q) return true;
       return normalizeText(`${row.disciplina} ${row.assunto} ${row.semana} ${row.dataBR} ${row.aulas.map((a) => a.aula).join(" ")}`).includes(q);
     });
-  }, [store.search, store.week, store.discipline, store.type]);
+  }, [store.search, store.week, store.discipline, store.type, todayMode]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, typeof visibleRows>();
@@ -318,7 +324,7 @@ export function ScheduleView() {
 
   return (
     <div className="grid gap-6">
-      <section className="grid gap-3 md:grid-cols-3">
+      {!todayMode && <section className="grid gap-3 md:grid-cols-3">
         <article className="card p-4">
           <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Dias restantes</span>
           <strong className="mt-1 block text-2xl font-black tracking-tight">{daysRemaining}</strong>
@@ -333,9 +339,9 @@ export function ScheduleView() {
           <strong className="mt-1 block text-2xl font-black tracking-tight">{progressPct}%</strong>
           <small className="font-bold text-slate-500 dark:text-slate-400">{progressDoneCount} de {progressTotal} concluidos</small>
         </article>
-      </section>
+      </section>}
 
-      <section className="card grid gap-3 p-3 lg:grid-cols-[1.3fr_.7fr_.7fr_.7fr]">
+      {!todayMode && <section className="card grid gap-3 p-3 lg:grid-cols-[1.3fr_.7fr_.7fr_.7fr]">
         <label className="relative">
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
           <input className="input pl-10" placeholder="Buscar aula, tema ou disciplina" value={store.search} onChange={(event) => store.setFilter("search", event.target.value)} />
@@ -355,12 +361,20 @@ export function ScheduleView() {
           <option value="simulado">Simulados</option>
           <option value="livre">Livres</option>
         </select>
-      </section>
+      </section>}
+
+      {todayMode && (
+        <section className="card p-5">
+          <span className="text-xs font-black uppercase tracking-wider text-slate-400">Hoje</span>
+          <h2 className="mt-1 text-2xl font-black">{new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</h2>
+          <p className="mt-1 text-sm text-slate-500">Visualizacao filtrada do Cronograma com os mesmos cards, botoes e registros.</p>
+        </section>
+      )}
 
       <section className="card p-4">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-violet-100 pb-4 dark:border-violet-400/20">
           <div>
-            <h2 className="flex items-center gap-2 text-xl font-black tracking-tight"><span className="h-2.5 w-2.5 rounded-full bg-fuchsia-500" />Aulas atrasadas</h2>
+            <h2 className="flex items-center gap-2 text-xl font-black tracking-tight"><span className="h-2.5 w-2.5 rounded-full bg-fuchsia-500" />{todayMode ? "Pendencias atrasadas" : "Aulas atrasadas"}</h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Lista automatica com todas as aulas do cronograma que ficaram pendentes ate hoje.</p>
           </div>
           <div className="min-w-20 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-center text-fuchsia-700 dark:border-fuchsia-400/30 dark:bg-fuchsia-500/10 dark:text-fuchsia-200">
@@ -386,7 +400,7 @@ export function ScheduleView() {
         </div>
       </section>
 
-      <section className="card p-4">
+      {!todayMode && <section className="card p-4">
         <h2 className="text-lg font-black">Estudos fora do cronograma</h2>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Adicione aulas e assuntos estudados externamente.</p>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -413,10 +427,10 @@ export function ScheduleView() {
           ))}
           {!store.extraStudies.length && <p className="py-4 text-center text-sm text-slate-400">Nenhum estudo externo adicionado.</p>}
         </div>
-      </section>
+      </section>}
 
-      <section className="grid gap-6 xl:grid-cols-[280px_1fr]">
-        <aside className="card h-fit p-4 xl:sticky xl:top-28">
+      <section className={todayMode ? "grid gap-6" : "grid gap-6 xl:grid-cols-[280px_1fr]"}>
+        {!todayMode && <aside className="card h-fit p-4 xl:sticky xl:top-28">
           <h2 className="mb-3 text-sm font-black uppercase tracking-wider text-slate-400">Semanas</h2>
           <div className="grid max-h-[520px] gap-2 overflow-auto">
             <button className={`rounded-xl px-3 py-2 text-left text-sm font-bold ${!store.week ? "bg-brand-600 text-white" : "bg-slate-50 dark:bg-slate-800"}`} onClick={() => store.setFilter("week", "")}>Todas as semanas</button>
@@ -426,10 +440,10 @@ export function ScheduleView() {
               </button>
             ))}
           </div>
-        </aside>
+        </aside>}
 
         <div className="grid gap-6">
-          <article className="card overflow-hidden">
+          {!todayMode && <article className="card overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4 dark:border-white/10">
               <div>
                 <h2 className="text-lg font-black">Lousa semanal - {selectedWeek}</h2>
@@ -455,7 +469,7 @@ export function ScheduleView() {
                 ))}
               </div>
             </div>
-          </article>
+          </article>}
 
           {grouped.map(([date, rows]) => {
             const first = rows[0];
