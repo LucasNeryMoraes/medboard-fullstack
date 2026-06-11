@@ -6,12 +6,13 @@ import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import type { ExtraStudy } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { allLessons, allProgressIds, areas, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO, weekRange } from "@/utils/schedule";
+import { allLessons, allProgressIds, areas, buildCronogramSchedule, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO } from "@/utils/schedule";
 
 type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type ProductivityRecord = { id: string; materia: string | null; horas: number; data: string; observacoes: string | null };
 type FlashcardRecord = { id: string; dueDate: string; updatedAt?: string; lastDifficulty?: string | null };
+type ScheduleSettingsRecord = { cronogramStartDate: string; resetMode: "SMART" | "FULL" };
 
 const dayLabels = [
   ["segunda", "Segunda"],
@@ -45,6 +46,13 @@ function compactDate(value: string | Date) {
   return new Date(value).toLocaleDateString("sv-SE");
 }
 
+function weekRangeFromRows(rows: { semana: string; data: string }[], week: string) {
+  const dates = rows.filter((row) => row.semana === week).map((row) => row.data).sort();
+  if (!dates.length) return "";
+  const format = (iso: string) => parseISODate(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+  return `${format(dates[0])} a ${format(dates[dates.length - 1])}`;
+}
+
 type ScheduleViewProps = {
   mode?: "full" | "today";
 };
@@ -56,8 +64,10 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
   const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "", observacoes: "", feitas: "", acertos: "", erros: "" });
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
-  const selectedWeek = store.week || schedule.rows.find((row) => row.data === todayISO())?.semana || schedule.semanas[0];
-  const totalProgressIds = useMemo(() => allProgressIds(), []);
+  const completedDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => [task.externalId as string, toDateInput(task.data)])), [tasks]);
+  const currentSchedule = useMemo(() => buildCronogramSchedule({ startDate: store.cronogramStartDate, completedIds: store.doneIds, completedDates, resetMode: store.cronogramResetMode }), [completedDates, store.cronogramResetMode, store.cronogramStartDate, store.doneIds]);
+  const selectedWeek = store.week || currentSchedule.rows.find((row) => row.data === todayISO())?.semana || currentSchedule.semanas[0];
+  const totalProgressIds = useMemo(() => allProgressIds(currentSchedule.rows), [currentSchedule.rows]);
   const extraProgressIds = useMemo(() => new Set(store.extraStudies.map((study) => study.id)), [store.extraStudies]);
   const progressDoneCount = useMemo(() => {
     const staticDone = store.doneIds.filter((id) => totalProgressIds.includes(id)).length;
@@ -66,21 +76,23 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
   }, [extraProgressIds, store.doneIds, totalProgressIds]);
   const progressTotal = totalProgressIds.length + extraProgressIds.size;
   const progressPct = progressTotal ? Math.round((progressDoneCount / progressTotal) * 100) : 0;
-  const daysRemaining = Math.max(0, Math.ceil((parseISODate(schedule.stats.fim).getTime() - parseISODate(todayISO()).getTime()) / 86_400_000));
+  const daysRemaining = Math.max(0, Math.ceil((parseISODate(currentSchedule.stats.fim).getTime() - parseISODate(todayISO()).getTime()) / 86_400_000));
 
   useEffect(() => {
     let ignore = false;
     async function hydrate() {
       try {
-        const [tasks, questions, productivity, flashcards] = await Promise.all([
+        const [tasks, questions, productivity, flashcards, settings] = await Promise.all([
           api<TaskRecord[]>("/api/tasks"),
           api<LessonQuestionRecord[]>("/api/lesson-questions"),
           api<ProductivityRecord[]>("/api/productivity"),
-          api<FlashcardRecord[]>("/api/flashcards")
+          api<FlashcardRecord[]>("/api/flashcards"),
+          api<ScheduleSettingsRecord>("/api/schedule-settings")
         ]);
         if (ignore) return;
         setTasks(tasks);
         setFlashcards(flashcards);
+        store.setCronogramSettings({ cronogramStartDate: toDateInput(settings.cronogramStartDate), resetMode: settings.resetMode });
         store.setDoneIds(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
         store.setLessonQuestions(Object.fromEntries(questions.map((item) => [item.lessonId, {
           done: item.done,
@@ -127,7 +139,7 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
 
   const visibleRows = useMemo(() => {
     const q = normalizeText(store.search);
-    return schedule.rows.filter((row) => {
+    return currentSchedule.rows.filter((row) => {
       if (todayMode) return row.data === todayISO();
       if (store.week && row.semana !== store.week) return false;
       if (store.discipline && row.disciplina !== store.discipline) return false;
@@ -135,7 +147,7 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
       if (!q) return true;
       return normalizeText(`${row.disciplina} ${row.assunto} ${row.semana} ${row.dataBR} ${row.aulas.map((a) => a.aula).join(" ")}`).includes(q);
     });
-  }, [store.search, store.week, store.discipline, store.type, todayMode]);
+  }, [currentSchedule.rows, store.search, store.week, store.discipline, store.type, todayMode]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, typeof visibleRows>();
@@ -158,16 +170,16 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
 
   const overdueLessons = useMemo(() => {
     const today = parseISODate(todayISO());
-    return allLessons()
+    return allLessons(currentSchedule.rows)
       .filter((lesson) => parseISODate(lesson.data) < today)
       .filter((lesson) => overdueMode === "all" || !store.doneIds.includes(lesson.id))
       .sort((a, b) => a.data.localeCompare(b.data));
-  }, [overdueMode, store.doneIds]);
+  }, [currentSchedule.rows, overdueMode, store.doneIds]);
 
   const pendingOverdue = useMemo(() => {
     const today = parseISODate(todayISO());
-    return allLessons().filter((lesson) => parseISODate(lesson.data) < today && !store.doneIds.includes(lesson.id));
-  }, [store.doneIds]);
+    return allLessons(currentSchedule.rows).filter((lesson) => parseISODate(lesson.data) < today && !store.doneIds.includes(lesson.id));
+  }, [currentSchedule.rows, store.doneIds]);
 
   function flashcardSummaryForDate(date: string) {
     const today = todayISO();
@@ -322,9 +334,47 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
     }
   }
 
+  async function resetCronogram(resetMode: "SMART" | "FULL") {
+    const message = resetMode === "FULL"
+      ? "Tem certeza que deseja fazer o reset completo? As marcacoes de conclusao do cronograma e questoes de aula serao removidas, mas seu historico de estudos, horas, flashcards, caderno e desempenho sera preservado."
+      : "Tem certeza que deseja resetar o cronograma? Todas as datas futuras serao recalculadas a partir de hoje. Seu historico de estudos sera preservado.";
+    if (!window.confirm(message)) return;
+
+    const cronogramStartDate = todayISO();
+    const previousStartDate = store.cronogramStartDate;
+    const previousResetMode = store.cronogramResetMode;
+    const previousDoneIds = store.doneIds;
+    const previousQuestions = store.lessonQuestions;
+    store.setCronogramSettings({ cronogramStartDate, resetMode });
+    if (resetMode === "FULL") {
+      store.setDoneIds(previousDoneIds.filter((id) => !id.startsWith("aula-") && !id.startsWith("review-") && !id.startsWith("simulado-sabado-")));
+      store.setLessonQuestions(Object.fromEntries(Object.entries(previousQuestions).filter(([id]) => !id.startsWith("aula-"))));
+      setTasks((current) => current.filter((task) => task.tipo === "EXTRA"));
+    }
+
+    try {
+      const settings = await api<ScheduleSettingsRecord>("/api/schedule-settings", {
+        method: "POST",
+        body: JSON.stringify({ cronogramStartDate, resetMode })
+      });
+      store.setCronogramSettings({ cronogramStartDate: toDateInput(settings.cronogramStartDate), resetMode: settings.resetMode });
+      if (resetMode === "FULL") {
+        const refreshedTasks = await api<TaskRecord[]>("/api/tasks");
+        setTasks(refreshedTasks);
+        store.setDoneIds(refreshedTasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
+      }
+      toast.success(resetMode === "FULL" ? "Cronograma reiniciado por completo." : "Cronograma redistribuido a partir de hoje.");
+    } catch {
+      store.setCronogramSettings({ cronogramStartDate: previousStartDate, resetMode: previousResetMode });
+      store.setDoneIds(previousDoneIds);
+      store.setLessonQuestions(previousQuestions);
+      toast.error("Nao consegui resetar o cronograma agora.");
+    }
+  }
+
   return (
     <div className="grid gap-6">
-      {!todayMode && <section className="grid gap-3 md:grid-cols-3">
+      {!todayMode && <section className="grid gap-3 md:grid-cols-4">
         <article className="card p-4">
           <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Dias restantes</span>
           <strong className="mt-1 block text-2xl font-black tracking-tight">{daysRemaining}</strong>
@@ -339,6 +389,14 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           <strong className="mt-1 block text-2xl font-black tracking-tight">{progressPct}%</strong>
           <small className="font-bold text-slate-500 dark:text-slate-400">{progressDoneCount} de {progressTotal} concluidos</small>
         </article>
+        <article className="card p-4">
+          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Data base</span>
+          <strong className="mt-1 block text-2xl font-black tracking-tight">{toDateInput(store.cronogramStartDate || currentSchedule.stats.inicio).split("-").reverse().join("/")}</strong>
+          <div className="mt-3 grid gap-2">
+            <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={() => resetCronogram("SMART")}>Resetar Cronograma</button>
+            <button className="btn-secondary" onClick={() => resetCronogram("FULL")}>Reset completo</button>
+          </div>
+        </article>
       </section>}
 
       {!todayMode && <section className="card grid gap-3 p-3 lg:grid-cols-[1.3fr_.7fr_.7fr_.7fr]">
@@ -346,13 +404,13 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
           <input className="input pl-10" placeholder="Buscar aula, tema ou disciplina" value={store.search} onChange={(event) => store.setFilter("search", event.target.value)} />
         </label>
-        <select className="input" value={store.week} onChange={(event) => store.setFilter("week", event.target.value)}>
-          <option value="">Todas as semanas</option>
-          {schedule.semanas.map((week) => <option key={week}>{week}</option>)}
-        </select>
-        <select className="input" value={store.discipline} onChange={(event) => store.setFilter("discipline", event.target.value)}>
-          <option value="">Todas as disciplinas</option>
-          {schedule.disciplinas.map((discipline) => <option key={discipline}>{discipline}</option>)}
+          <select className="input" value={store.week} onChange={(event) => store.setFilter("week", event.target.value)}>
+            <option value="">Todas as semanas</option>
+              {currentSchedule.semanas.map((week) => <option key={week}>{week}</option>)}
+          </select>
+          <select className="input" value={store.discipline} onChange={(event) => store.setFilter("discipline", event.target.value)}>
+            <option value="">Todas as disciplinas</option>
+              {currentSchedule.disciplinas.map((discipline) => <option key={discipline}>{discipline}</option>)}
         </select>
         <select className="input" value={store.type} onChange={(event) => store.setFilter("type", event.target.value)}>
           <option value="">Todos os tipos</option>
@@ -434,9 +492,9 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           <h2 className="mb-3 text-sm font-black uppercase tracking-wider text-slate-400">Semanas</h2>
           <div className="grid max-h-[520px] gap-2 overflow-auto">
             <button className={`rounded-xl px-3 py-2 text-left text-sm font-bold ${!store.week ? "bg-brand-600 text-white" : "bg-slate-50 dark:bg-slate-800"}`} onClick={() => store.setFilter("week", "")}>Todas as semanas</button>
-            {schedule.semanas.map((week) => (
+            {currentSchedule.semanas.map((week) => (
               <button key={week} className={`rounded-xl px-3 py-2 text-left text-sm font-bold ${store.week === week ? "bg-brand-600 text-white" : "bg-slate-50 dark:bg-slate-800"}`} onClick={() => store.setFilter("week", week)}>
-                {week}<span className="block text-xs font-medium opacity-70">{weekRange(week)}</span>
+                {week}<span className="block text-xs font-medium opacity-70">{weekRangeFromRows(currentSchedule.rows, week)}</span>
               </button>
             ))}
           </div>

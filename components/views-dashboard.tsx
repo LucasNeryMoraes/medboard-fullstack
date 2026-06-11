@@ -5,7 +5,7 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import { BookOpenCheck, Brain, ShieldAlert, Target, TimerReset } from "lucide-react";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { allLessons, allProgressIds, areas, parseISODate, schedule, todayISO } from "@/utils/schedule";
+import { allLessons, allProgressIds, areas, buildCronogramSchedule, parseISODate, schedule, todayISO } from "@/utils/schedule";
 
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type ErrorNote = { id: string; tema: string; materia: string | null; erro: string; revisao: string | null; flashcard: string | null; dificuldade: string | null; data: string; createdAt: string };
@@ -13,6 +13,7 @@ type Flashcard = { id: string; pergunta: string; tag: string | null; materia: st
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
 type Performance = { id: string; materia: string; questoes?: number; acertos: number; erros: number; percentual: number; examName: string | null; instituicao?: string | null; observacoes?: string | null; data: string; createdAt: string };
 type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
+type ScheduleSettingsRecord = { cronogramStartDate: string; resetMode: "SMART" | "FULL" };
 type AreaPerformance = { area: string; acertos: number; erros: number; total: number; feitas: number; percentual: number; horas: number; tendencia: number; status: "Critico" | "Atencao" | "Bom"; flashPendentes: number; flashAtrasados: number; errosRecentes: number };
 type ScoreInput = {
   generalAccuracy: number;
@@ -105,16 +106,14 @@ function calculateResidencyScore(input: ScoreInput) {
 }
 
 export function DashboardView() {
-  const doneIds = useMedboardStore((state) => state.doneIds);
   const storeQuestions = useMedboardStore((state) => state.lessonQuestions);
-  const ids = useMemo(() => allProgressIds(), []);
-  const lessons = useMemo(() => allLessons(), []);
   const [lessonQuestionRecords, setLessonQuestionRecords] = useState<LessonQuestionRecord[]>([]);
   const [errors, setErrors] = useState<ErrorNote[]>([]);
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [performances, setPerformances] = useState<Performance[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [settings, setSettings] = useState<ScheduleSettingsRecord | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -123,15 +122,17 @@ export function DashboardView() {
       api<Flashcard[]>("/api/flashcards"),
       api<Productivity[]>("/api/productivity"),
       api<Performance[]>("/api/performance"),
-      api<TaskRecord[]>("/api/tasks")
+      api<TaskRecord[]>("/api/tasks"),
+      api<ScheduleSettingsRecord>("/api/schedule-settings")
     ])
-      .then(([questionItems, errorItems, cardItems, productivityItems, performanceItems, taskItems]) => {
+      .then(([questionItems, errorItems, cardItems, productivityItems, performanceItems, taskItems, settingsItem]) => {
         setLessonQuestionRecords(questionItems);
         setErrors(errorItems);
         setFlashcards(cardItems);
         setProductivity(productivityItems);
         setPerformances(performanceItems);
         setTasks(taskItems);
+        setSettings(settingsItem);
       })
       .catch(() => {
         setLessonQuestionRecords([]);
@@ -140,8 +141,20 @@ export function DashboardView() {
         setProductivity([]);
         setPerformances([]);
         setTasks([]);
+        setSettings(null);
       });
   }, []);
+
+  const completedIds = useMemo(() => tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string), [tasks]);
+  const completedDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => [task.externalId as string, compactDate(task.data)])), [tasks]);
+  const currentSchedule = useMemo(() => buildCronogramSchedule({
+    startDate: settings?.cronogramStartDate ? compactDate(settings.cronogramStartDate) : schedule.stats.inicio,
+    completedIds,
+    completedDates,
+    resetMode: settings?.resetMode || "SMART"
+  }), [completedDates, completedIds, settings]);
+  const ids = useMemo(() => allProgressIds(currentSchedule.rows), [currentSchedule.rows]);
+  const lessons = useMemo(() => allLessons(currentSchedule.rows), [currentSchedule.rows]);
 
   const todayDate = parseISODate(today);
   const weekStart = startOfWeek(todayDate);
@@ -151,11 +164,11 @@ export function DashboardView() {
   const last30Start = new Date(todayDate);
   last30Start.setDate(last30Start.getDate() - 30);
   const currentMonth = monthKey(today);
-  const daysRemaining = Math.max(0, Math.ceil((parseISODate(schedule.stats.fim).getTime() - todayDate.getTime()) / 86_400_000));
-  const progressPercent = ids.length ? Math.round((doneIds.length / ids.length) * 100) : 0;
-  const overdueLessons = lessons.filter((lesson) => parseISODate(lesson.data) < todayDate && !doneIds.includes(lesson.id));
-  const overdueReviews = schedule.rows.flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, data: row.data, dataBR: row.dataBR }))).filter((review) => parseISODate(review.data) < todayDate && !doneIds.includes(review.id));
-  const scheduledExams = schedule.rows.filter((row) => (row.tipo === "simulado" || row.assunto.toLowerCase().includes("simulado")) && parseISODate(row.data) >= todayDate).slice(0, 4);
+  const daysRemaining = Math.max(0, Math.ceil((parseISODate(currentSchedule.stats.fim).getTime() - todayDate.getTime()) / 86_400_000));
+  const progressPercent = ids.length ? Math.round((completedIds.length / ids.length) * 100) : 0;
+  const overdueLessons = lessons.filter((lesson) => parseISODate(lesson.data) < todayDate && !completedIds.includes(lesson.id));
+  const overdueReviews = currentSchedule.rows.flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, data: row.data, dataBR: row.dataBR }))).filter((review) => parseISODate(review.data) < todayDate && !completedIds.includes(review.id));
+  const scheduledExams = currentSchedule.rows.filter((row) => (row.tipo === "simulado" || row.assunto.toLowerCase().includes("simulado")) && parseISODate(row.data) >= todayDate).slice(0, 4);
 
   const questionByLesson = useMemo(() => {
     const remote = Object.fromEntries(lessonQuestionRecords.map((item) => [item.lessonId, {
@@ -344,7 +357,7 @@ export function DashboardView() {
     "Sem bloqueios criticos. Mantenha o plano do dia.";
 
   const executiveCards = [
-    { title: "Progresso geral", value: `${progressPercent}%`, detail: `${doneIds.length}/${ids.length} aulas e revisoes concluidas`, icon: Target, meta: `${daysRemaining} dias restantes` },
+    { title: "Progresso geral", value: `${progressPercent}%`, detail: `${completedIds.length}/${ids.length} aulas e revisoes concluidas`, icon: Target, meta: `${daysRemaining} dias restantes` },
     { title: "Questoes", value: totalQuestions, detail: `${generalAccuracy}% de acerto geral`, icon: BookOpenCheck, meta: `${Math.round((totalQuestions / ANNUAL_QUESTIONS_GOAL) * 100)}% da meta anual` },
     { title: "Horas", value: formatHours(hoursWeek), detail: `${Math.round((hoursWeek / WEEKLY_HOURS_GOAL) * 100)}% da meta semanal`, icon: TimerReset, meta: `${formatHours(hoursTotal)} totais` },
     { title: "Pendencias", value: flashOverdue.length + overdueReviews.length + overdueLessons.length, detail: `${flashOverdue.length} cards, ${overdueReviews.length} revisoes, ${overdueLessons.length} aulas`, icon: ShieldAlert, meta: "prioridade automatica" }

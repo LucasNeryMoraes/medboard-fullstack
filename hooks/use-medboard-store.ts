@@ -34,12 +34,15 @@ type MedboardState = {
   flashcardReviewRequest: number;
   flashcardReturnTab: TabKey | null;
   activeTimer: ActiveStudyTimer;
+  cronogramStartDate: string | null;
+  cronogramResetMode: "SMART" | "FULL";
   onboardingDone: boolean;
   setTab: (tab: TabKey) => void;
   setReviewTarget: (target: ReviewTarget) => void;
   requestFlashcardReview: (returnTab?: TabKey | null) => void;
   clearFlashcardReturn: () => void;
   setActiveTimer: (timer: ActiveStudyTimer) => void;
+  setCronogramSettings: (settings: { cronogramStartDate: string | null; resetMode?: "SMART" | "FULL" }) => void;
   setFilter: (key: "search" | "week" | "discipline" | "type", value: string) => void;
   toggleDone: (id: string) => void;
   setDoneIds: (ids: string[]) => void;
@@ -73,12 +76,15 @@ export const useMedboardStore = create<MedboardState>()(
       flashcardReviewRequest: 0,
       flashcardReturnTab: null,
       activeTimer: null,
+      cronogramStartDate: null,
+      cronogramResetMode: "SMART",
       onboardingDone: false,
       setTab: (tab) => set({ tab }),
       setReviewTarget: (reviewTarget) => set({ reviewTarget }),
       requestFlashcardReview: (flashcardReturnTab = null) => set((state) => ({ flashcardReviewRequest: state.flashcardReviewRequest + 1, flashcardReturnTab, tab: "caderno" })),
       clearFlashcardReturn: () => set({ flashcardReturnTab: null }),
       setActiveTimer: (activeTimer) => set({ activeTimer }),
+      setCronogramSettings: ({ cronogramStartDate, resetMode }) => set({ cronogramStartDate, cronogramResetMode: resetMode || "SMART" }),
       setFilter: (key, value) => set({ [key]: value }),
       toggleDone: (id) =>
         set((state) => ({

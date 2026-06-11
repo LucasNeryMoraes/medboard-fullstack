@@ -105,3 +105,8 @@ export const scheduleWeekSchema = z.object({
   simulados: z.unknown().default([]),
   board: z.unknown().optional()
 });
+
+export const scheduleSettingsSchema = z.object({
+  cronogramStartDate: z.coerce.date(),
+  resetMode: z.enum(["SMART", "FULL"]).default("SMART")
+});

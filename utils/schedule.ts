@@ -29,6 +29,165 @@ export function saturdaySimuladoId(iso: string) {
   return `simulado-sabado-${iso}`;
 }
 
+function addDays(iso: string, days: number) {
+  const date = parseISODate(iso);
+  date.setDate(date.getDate() + days);
+  return date.toLocaleDateString("sv-SE");
+}
+
+function formatBR(iso: string) {
+  return parseISODate(iso).toLocaleDateString("pt-BR");
+}
+
+function weekdayLabel(iso: string) {
+  const [label] = parseISODate(iso).toLocaleDateString("pt-BR", { weekday: "long" }).split(",");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function weekLabel(startISO: string, dateISO: string) {
+  const diff = Math.max(0, Math.floor((parseISODate(dateISO).getTime() - parseISODate(startISO).getTime()) / 86_400_000));
+  return `Semana ${Math.floor(diff / 7) + 1}`;
+}
+
+function nextStudyDate(cursorISO: string) {
+  let cursor = cursorISO;
+  while ([0, 6].includes(parseISODate(cursor).getDay())) cursor = addDays(cursor, 1);
+  return cursor;
+}
+
+function rowBase(row: number, startISO: string, dateISO: string, tipo: ScheduleRow["tipo"], overrides: Partial<ScheduleRow> = {}): ScheduleRow {
+  return {
+    row,
+    semana: weekLabel(startISO, dateISO),
+    data: dateISO,
+    dataBR: formatBR(dateISO),
+    diaSemana: weekdayLabel(dateISO),
+    horario: tipo === "simulado" ? "08h00 - 12h00" : tipo === "revisao" ? "21h30 - 22h30" : "19h30 - 21h30",
+    disciplina: tipo === "simulado" ? "Simulado" : tipo === "livre" ? "Livre" : overrides.disciplina || "Revisao",
+    assunto: overrides.assunto || (tipo === "simulado" ? "Simulado semanal" : tipo === "livre" ? "Domingo livre" : "Revisao"),
+    tipo,
+    domingo: tipo === "livre",
+    aulas: [],
+    revisoesDoDia: [],
+    ...overrides
+  };
+}
+
+export function buildCronogramSchedule(options: { startDate?: string | null; completedIds?: string[]; completedDates?: Record<string, string>; resetMode?: "SMART" | "FULL" } = {}) {
+  const startDate = options.startDate || schedule.stats.inicio;
+  const completed = new Set(options.resetMode === "FULL" ? [] : options.completedIds || []);
+  const completedDates = options.completedDates || {};
+  const sourceLessons = allLessons(schedule.rows);
+  const lockedLessons = sourceLessons.filter((lesson) => completed.has(lesson.id) && completedDates[lesson.id]);
+  const pendingLessons = sourceLessons
+    .filter((lesson) => !completed.has(lesson.id))
+    .sort((a, b) => inferPriority(b).score - inferPriority(a).score || a.data.localeCompare(b.data) || a.id.localeCompare(b.id));
+
+  const rows: ScheduleRow[] = [];
+  const reviewMap = new Map<string, ScheduleRow["revisoesDoDia"]>();
+  let cursor = nextStudyDate(startDate);
+  let row = 1;
+  let index = 0;
+
+  const lockedByDate = new Map<string, ScheduleLesson[]>();
+  lockedLessons.forEach((lesson) => {
+    const date = completedDates[lesson.id];
+    lockedByDate.set(date, [...(lockedByDate.get(date) || []), {
+      ...lesson,
+      data: date,
+      dataBR: formatBR(date),
+      diaSemana: weekdayLabel(date),
+      semana: weekLabel(startDate, date)
+    }]);
+  });
+  lockedByDate.forEach((lessons, date) => {
+    rows.push(rowBase(row++, startDate, date, "aula", {
+      disciplina: lessons[0]?.disciplina || "Aula",
+      assunto: lessons.map((lesson) => lesson.aula).join(" | "),
+      aulas: lessons
+    }));
+  });
+
+  while (index < pendingLessons.length) {
+    const day = parseISODate(cursor).getDay();
+    if (day === 6) {
+      rows.push(rowBase(row++, startDate, cursor, "simulado"));
+      cursor = addDays(cursor, 1);
+      continue;
+    }
+    if (day === 0) {
+      rows.push(rowBase(row++, startDate, cursor, "livre"));
+      cursor = addDays(cursor, 1);
+      continue;
+    }
+
+    const dayLessons = pendingLessons.slice(index, index + 2);
+    index += dayLessons.length;
+    const lessons = dayLessons.map((lesson): ScheduleLesson => ({
+      ...lesson,
+      data: cursor,
+      dataBR: formatBR(cursor),
+      diaSemana: weekdayLabel(cursor),
+      semana: weekLabel(startDate, cursor)
+    }));
+    rows.push(rowBase(row++, startDate, cursor, "aula", {
+      disciplina: lessons[0]?.disciplina || "Aula",
+      assunto: lessons.map((lesson) => lesson.aula).join(" | "),
+      aulas: lessons
+    }));
+
+    lessons.forEach((lesson) => {
+      [15, 30].forEach((days) => {
+        const reviewDate = addDays(cursor, days);
+        reviewMap.set(reviewDate, [
+          ...(reviewMap.get(reviewDate) || []),
+          {
+            id: `review-${lesson.id}-${days}`,
+            tipoRevisao: `D+${days}`,
+            disciplina: lesson.disciplina,
+            aula: lesson.aula,
+            dataOriginal: cursor,
+            semanaOriginal: weekLabel(startDate, cursor)
+          }
+        ]);
+      });
+    });
+
+    cursor = addDays(cursor, 1);
+  }
+
+  const endWithReviews = [...reviewMap.keys()].sort().at(-1);
+  const finalDate = endWithReviews && endWithReviews > cursor ? endWithReviews : cursor;
+  let fillCursor = startDate;
+  while (fillCursor <= finalDate) {
+    const day = parseISODate(fillCursor).getDay();
+    const hasRow = rows.some((item) => item.data === fillCursor && (item.tipo === "aula" || item.tipo === "simulado" || item.tipo === "livre"));
+    if (!hasRow && day === 6) rows.push(rowBase(row++, startDate, fillCursor, "simulado"));
+    if (!hasRow && day === 0) rows.push(rowBase(row++, startDate, fillCursor, "livre"));
+    const reviews = reviewMap.get(fillCursor);
+    if (reviews?.length) rows.push(rowBase(row++, startDate, fillCursor, "revisao", { revisoesDoDia: reviews, disciplina: "Revisao", assunto: `${reviews.length} revisao(oes)` }));
+    fillCursor = addDays(fillCursor, 1);
+  }
+
+  rows.sort((a, b) => a.data.localeCompare(b.data) || a.row - b.row);
+  rows.forEach((item, idx) => { item.row = idx + 1; });
+
+  const semanas = [...new Set(rows.map((item) => item.semana))];
+  return {
+    ...schedule,
+    rows,
+    semanas,
+    stats: {
+      ...schedule.stats,
+      inicio: startDate,
+      fim: rows.at(-1)?.data || startDate,
+      totalDias: new Set(rows.map((item) => item.data)).size,
+      totalAulas: pendingLessons.length,
+      totalRevisoes: rows.reduce((acc, item) => acc + item.revisoesDoDia.length, 0)
+    }
+  } satisfies ScheduleData;
+}
+
 export function allLessons(rows: ScheduleRow[] = schedule.rows) {
   return rows.flatMap((row) => row.aulas || []);
 }
