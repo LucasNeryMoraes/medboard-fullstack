@@ -92,6 +92,8 @@ function addSpacedReviews(reviewMap: Map<string, ScheduleRow["revisoesDoDia"]>, 
 
 export function buildCronogramSchedule(options: { startDate?: string | null; completedIds?: string[]; completedDates?: Record<string, string>; resetMode?: "SMART" | "FULL" } = {}) {
   const startDate = options.startDate || schedule.stats.inicio;
+  if (startDate === schedule.stats.inicio) return schedule;
+
   const completed = new Set(options.resetMode === "FULL" ? [] : options.completedIds || []);
   const completedDates = options.completedDates || {};
   const sourceLessons = allLessons(schedule.rows);
