@@ -73,6 +73,23 @@ function rowBase(row: number, startISO: string, dateISO: string, tipo: ScheduleR
   };
 }
 
+function addSpacedReviews(reviewMap: Map<string, ScheduleRow["revisoesDoDia"]>, lesson: ScheduleLesson, lessonDate: string, startDate: string) {
+  [15, 30].forEach((days) => {
+    const reviewDate = addDays(lessonDate, days);
+    reviewMap.set(reviewDate, [
+      ...(reviewMap.get(reviewDate) || []),
+      {
+        id: `review-${lesson.id}-${days}`,
+        tipoRevisao: `D+${days}`,
+        disciplina: lesson.disciplina,
+        aula: lesson.aula,
+        dataOriginal: lessonDate,
+        semanaOriginal: weekLabel(startDate, lessonDate)
+      }
+    ]);
+  });
+}
+
 export function buildCronogramSchedule(options: { startDate?: string | null; completedIds?: string[]; completedDates?: Record<string, string>; resetMode?: "SMART" | "FULL" } = {}) {
   const startDate = options.startDate || schedule.stats.inicio;
   const completed = new Set(options.resetMode === "FULL" ? [] : options.completedIds || []);
@@ -106,6 +123,7 @@ export function buildCronogramSchedule(options: { startDate?: string | null; com
       assunto: lessons.map((lesson) => lesson.aula).join(" | "),
       aulas: lessons
     }));
+    lessons.forEach((lesson) => addSpacedReviews(reviewMap, lesson, date, startDate));
   });
 
   while (index < pendingLessons.length) {
@@ -136,22 +154,7 @@ export function buildCronogramSchedule(options: { startDate?: string | null; com
       aulas: lessons
     }));
 
-    lessons.forEach((lesson) => {
-      [15, 30].forEach((days) => {
-        const reviewDate = addDays(cursor, days);
-        reviewMap.set(reviewDate, [
-          ...(reviewMap.get(reviewDate) || []),
-          {
-            id: `review-${lesson.id}-${days}`,
-            tipoRevisao: `D+${days}`,
-            disciplina: lesson.disciplina,
-            aula: lesson.aula,
-            dataOriginal: cursor,
-            semanaOriginal: weekLabel(startDate, cursor)
-          }
-        ]);
-      });
-    });
+    lessons.forEach((lesson) => addSpacedReviews(reviewMap, lesson, cursor, startDate));
 
     cursor = addDays(cursor, 1);
   }

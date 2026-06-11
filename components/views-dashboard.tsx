@@ -21,6 +21,7 @@ type ScoreInput = {
   progressPercent: number;
   flashCompletionRate: number;
   flashRetentionRate: number;
+  reviewOnTimeRate: number;
   hoursWeek: number;
   weeklyGoal: number;
   criticalAreas: number;
@@ -79,7 +80,7 @@ function classifyScore(score: number) {
 function calculateResidencyScore(input: ScoreInput) {
   const questionScore = clamp(input.generalAccuracy);
   const simulationScore = clamp(input.examAverage || input.generalAccuracy);
-  const scheduleScore = clamp(input.progressPercent);
+  const scheduleScore = clamp((input.progressPercent * 0.65) + (input.reviewOnTimeRate * 0.35));
   const flashcardScore = clamp((input.flashCompletionRate * 0.55) + (input.flashRetentionRate * 0.45));
   const hoursScore = clamp((input.hoursWeek / input.weeklyGoal) * 100);
   const criticalPenalty = clamp(input.criticalAreas * 12, 0, 100);
@@ -98,6 +99,7 @@ function calculateResidencyScore(input: ScoreInput) {
       { label: "Questoes", value: Math.round(questionScore), weight: "25%" },
       { label: "Simulados", value: Math.round(simulationScore), weight: "20%" },
       { label: "Cronograma", value: Math.round(scheduleScore), weight: "15%" },
+      { label: "Revisoes em dia", value: Math.round(input.reviewOnTimeRate), weight: "incluido" },
       { label: "Flashcards", value: Math.round(flashcardScore), weight: "20%" },
       { label: "Horas", value: Math.round(hoursScore), weight: "15%" },
       { label: "Areas criticas", value: Math.round(criticalPenalty), weight: "-5%" }
@@ -168,6 +170,9 @@ export function DashboardView() {
   const progressPercent = ids.length ? Math.round((completedIds.length / ids.length) * 100) : 0;
   const overdueLessons = lessons.filter((lesson) => parseISODate(lesson.data) < todayDate && !completedIds.includes(lesson.id));
   const overdueReviews = currentSchedule.rows.flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, data: row.data, dataBR: row.dataBR }))).filter((review) => parseISODate(review.data) < todayDate && !completedIds.includes(review.id));
+  const scheduledReviews = currentSchedule.rows.flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, data: row.data })));
+  const completedReviews = scheduledReviews.filter((review) => completedIds.includes(review.id));
+  const reviewOnTimeRate = scheduledReviews.length ? Math.round((completedReviews.length / scheduledReviews.length) * 100) : 100;
   const scheduledExams = currentSchedule.rows.filter((row) => (row.tipo === "simulado" || row.assunto.toLowerCase().includes("simulado")) && parseISODate(row.data) >= todayDate).slice(0, 4);
 
   const questionByLesson = useMemo(() => {
@@ -281,7 +286,7 @@ export function DashboardView() {
   const worstExam = performances.length ? [...performances].sort((a, b) => a.percentual - b.percentual)[0] : null;
   const lastExam = performances.length ? [...performances].sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0] : null;
 
-  const score = calculateResidencyScore({ generalAccuracy, examAverage, progressPercent, flashCompletionRate, flashRetentionRate, hoursWeek, weeklyGoal: WEEKLY_HOURS_GOAL, criticalAreas });
+  const score = calculateResidencyScore({ generalAccuracy, examAverage, progressPercent, flashCompletionRate, flashRetentionRate, reviewOnTimeRate, hoursWeek, weeklyGoal: WEEKLY_HOURS_GOAL, criticalAreas });
   const lastMonthHours = productivity.filter((item) => new Date(item.data) >= last30Start).reduce((acc, item) => acc + Number(item.horas || 0), 0);
   const previousMonthHours = productivity.filter((item) => new Date(item.data) >= previous30Start && new Date(item.data) < last30Start).reduce((acc, item) => acc + Number(item.horas || 0), 0);
   const scoreTrend = Math.round((lastMonthHours - previousMonthHours) / Math.max(1, previousMonthHours) * 100);
@@ -349,8 +354,9 @@ export function DashboardView() {
     { tone: "green" as const, label: "Meta semanal", value: Math.round((hoursWeek / WEEKLY_HOURS_GOAL) * 100), detail: `${formatHours(hoursWeek)} de ${formatHours(WEEKLY_HOURS_GOAL)}` }
   ];
   const recommendation =
-    flashOverdue.length ? `${flashOverdue.length} flashcards atrasados precisam ser revisados antes de abrir conteudo novo.` :
+    overdueReviews.length ? `Existem ${overdueReviews.length} revisoes espacadas atrasadas impactando sua curva de esquecimento.` :
     overdueLessons.length ? `Existem ${overdueLessons.length} aulas atrasadas no cronograma.` :
+    flashOverdue.length ? `${flashOverdue.length} flashcards atrasados precisam ser revisados antes de abrir conteudo novo.` :
     worstArea ? `Sua maior fragilidade atual e ${worstArea.area}, com ${worstArea.percentual}% de aproveitamento.` :
     recurringErrors.length ? `Ha ${recurringErrors.length} assuntos recorrentes no caderno de erros.` :
     hoursWeek < WEEKLY_HOURS_GOAL ? `Faltam ${formatHours(WEEKLY_HOURS_GOAL - hoursWeek)} para bater a meta semanal de estudo.` :
@@ -360,7 +366,7 @@ export function DashboardView() {
     { title: "Progresso geral", value: `${progressPercent}%`, detail: `${completedIds.length}/${ids.length} aulas e revisoes concluidas`, icon: Target, meta: `${daysRemaining} dias restantes` },
     { title: "Questoes", value: totalQuestions, detail: `${generalAccuracy}% de acerto geral`, icon: BookOpenCheck, meta: `${Math.round((totalQuestions / ANNUAL_QUESTIONS_GOAL) * 100)}% da meta anual` },
     { title: "Horas", value: formatHours(hoursWeek), detail: `${Math.round((hoursWeek / WEEKLY_HOURS_GOAL) * 100)}% da meta semanal`, icon: TimerReset, meta: `${formatHours(hoursTotal)} totais` },
-    { title: "Pendencias", value: flashOverdue.length + overdueReviews.length + overdueLessons.length, detail: `${flashOverdue.length} cards, ${overdueReviews.length} revisoes, ${overdueLessons.length} aulas`, icon: ShieldAlert, meta: "prioridade automatica" }
+    { title: "Pendencias", value: overdueReviews.length + overdueLessons.length, detail: `${overdueLessons.length} aulas, ${overdueReviews.length} revisoes`, icon: ShieldAlert, meta: `${overdueReviews.length + overdueLessons.length} pendencias totais` }
   ];
 
   return (

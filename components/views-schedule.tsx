@@ -53,6 +53,15 @@ function weekRangeFromRows(rows: { semana: string; data: string }[], week: strin
   return `${format(dates[0])} a ${format(dates[dates.length - 1])}`;
 }
 
+function daysLate(dateISO: string) {
+  return Math.max(1, Math.floor((parseISODate(todayISO()).getTime() - parseISODate(dateISO).getTime()) / 86_400_000));
+}
+
+function LateBadge({ date }: { date: string }) {
+  const days = daysLate(date);
+  return <span className="badge bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-200">Atrasada ha {days} dia{days > 1 ? "s" : ""}</span>;
+}
+
 type ScheduleViewProps = {
   mode?: "full" | "today";
 };
@@ -176,9 +185,25 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
       .sort((a, b) => a.data.localeCompare(b.data));
   }, [currentSchedule.rows, overdueMode, store.doneIds]);
 
+  const overdueReviews = useMemo(() => {
+    const today = parseISODate(todayISO());
+    return currentSchedule.rows
+      .flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, data: row.data, dataBR: row.dataBR, semana: row.semana })))
+      .filter((review) => parseISODate(review.data) < today)
+      .filter((review) => overdueMode === "all" || !store.doneIds.includes(review.id))
+      .sort((a, b) => a.data.localeCompare(b.data));
+  }, [currentSchedule.rows, overdueMode, store.doneIds]);
+
   const pendingOverdue = useMemo(() => {
     const today = parseISODate(todayISO());
     return allLessons(currentSchedule.rows).filter((lesson) => parseISODate(lesson.data) < today && !store.doneIds.includes(lesson.id));
+  }, [currentSchedule.rows, store.doneIds]);
+
+  const pendingOverdueReviews = useMemo(() => {
+    const today = parseISODate(todayISO());
+    return currentSchedule.rows
+      .flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, data: row.data })))
+      .filter((review) => parseISODate(review.data) < today && !store.doneIds.includes(review.id));
   }, [currentSchedule.rows, store.doneIds]);
 
   function flashcardSummaryForDate(date: string) {
@@ -381,8 +406,9 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           <small className="font-bold text-slate-500 dark:text-slate-400">dias ate o fim do cronograma</small>
         </article>
         <article className="card p-4">
-          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Aulas atrasadas</span>
-          <strong className="mt-1 block text-2xl font-black tracking-tight">{pendingOverdue.length}</strong>
+          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Pendencias</span>
+          <strong className="mt-1 block text-2xl font-black tracking-tight">{pendingOverdue.length + pendingOverdueReviews.length}</strong>
+          <small className="font-bold text-slate-500 dark:text-slate-400">{pendingOverdue.length} aulas - {pendingOverdueReviews.length} revisoes</small>
         </article>
         <article className="card p-4">
           <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Progresso total do cronograma</span>
@@ -436,7 +462,7 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Lista automatica com todas as aulas do cronograma que ficaram pendentes ate hoje.</p>
           </div>
           <div className="min-w-20 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-center text-fuchsia-700 dark:border-fuchsia-400/30 dark:bg-fuchsia-500/10 dark:text-fuchsia-200">
-            <strong className="block text-2xl">{pendingOverdue.length}</strong>
+            <strong className="block text-2xl">{pendingOverdue.length + pendingOverdueReviews.length}</strong>
             <span className="text-xs font-bold">pendente(s)</span>
           </div>
         </div>
@@ -444,17 +470,31 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           <button className={`rounded-full px-4 py-2 text-sm font-bold ${overdueMode === "pending" ? "bg-fuchsia-600 text-white" : "border border-violet-100 text-violet-900 dark:border-white/10 dark:text-violet-100"}`} onClick={() => setOverdueMode("pending")}>Pendentes</button>
           <button className={`rounded-full px-4 py-2 text-sm font-bold ${overdueMode === "all" ? "bg-fuchsia-600 text-white" : "border border-violet-100 text-violet-900 dark:border-white/10 dark:text-violet-100"}`} onClick={() => setOverdueMode("all")}>Todas</button>
         </div>
-        <div className="mt-4 grid gap-3">
+        <div className="mt-4 grid gap-5">
+          {todayMode && (
+            <OverdueReviewsGroup reviews={overdueReviews} storeDoneIds={store.doneIds} syncTask={syncTask} />
+          )}
+
+          <div className="grid gap-3">
+            <h3 className="text-sm font-black uppercase tracking-wider text-slate-400">Aulas atrasadas</h3>
           {overdueLessons.map((lesson) => (
             <article key={lesson.id} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div className="font-black text-fuchsia-600">{lesson.dataBR} - {lesson.disciplina}</div>
+                <div>
+                  <div className="font-black text-fuchsia-600">{lesson.dataBR} - {lesson.disciplina}</div>
+                  <div className="mt-2"><LateBadge date={lesson.data} /></div>
+                </div>
                 <div className="text-sm text-slate-600 dark:text-slate-300 md:text-right">{lesson.aula}<br />{lesson.semana} - {lesson.horario}</div>
               </div>
               <button className="mt-4 w-full rounded-xl bg-violet-950 px-4 py-2.5 text-sm font-black text-white" onClick={() => syncTask(lesson.id, true, { titulo: lesson.aula, data: lesson.data, tipo: "AULA", materia: lesson.disciplina })}>Marcar como assistida</button>
             </article>
           ))}
           {!overdueLessons.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma aula atrasada encontrada.</div>}
+          </div>
+
+          {!todayMode && (
+            <OverdueReviewsGroup reviews={overdueReviews} storeDoneIds={store.doneIds} syncTask={syncTask} />
+          )}
         </div>
       </section>
 
@@ -691,6 +731,36 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           })}
         </div>
       </section>
+    </div>
+  );
+}
+
+function OverdueReviewsGroup({ reviews, storeDoneIds, syncTask }: {
+  reviews: Array<{ id: string; tipoRevisao: string; disciplina: string; aula: string; data: string; dataBR: string; semana: string }>;
+  storeDoneIds: string[];
+  syncTask: (id: string, checked: boolean, payload: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia?: string; descricao?: string; metadata?: unknown }) => Promise<void>;
+}) {
+  return (
+    <div className="grid gap-3">
+      <h3 className="text-sm font-black uppercase tracking-wider text-slate-400">Revisoes atrasadas</h3>
+      {reviews.map((review) => (
+        <button
+          key={review.id}
+          className="grid gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10 md:grid-cols-[1fr_auto]"
+          onClick={() => syncTask(review.id, !storeDoneIds.includes(review.id), { titulo: review.aula, data: review.data, tipo: "REVISAO", materia: review.disciplina })}
+        >
+          <span>
+            <strong className="block">{review.tipoRevisao} - {review.disciplina}</strong>
+            <span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span>
+            <span className="mt-1 block text-xs text-slate-500">{review.dataBR} - {review.semana}</span>
+          </span>
+          <span className="flex flex-wrap items-center gap-2 md:justify-end">
+            <LateBadge date={review.data} />
+            <span className="badge bg-white text-brand-700 dark:bg-slate-900">{storeDoneIds.includes(review.id) ? "Realizada" : "Marcar revisao"}</span>
+          </span>
+        </button>
+      ))}
+      {!reviews.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma revisao atrasada encontrada.</div>}
     </div>
   );
 }
