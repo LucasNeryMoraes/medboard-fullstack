@@ -4,14 +4,14 @@ import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/security";
 import { requireUserId } from "@/lib/session";
 import { scheduleSettingsSchema } from "@/lib/validations";
-import { schedule } from "@/utils/schedule";
+import { parseISODate, schedule } from "@/utils/schedule";
 
 export async function GET() {
   try {
     const userId = await requireUserId();
     const settings = await prisma.scheduleSettings.upsert({
       where: { userId },
-      create: { userId, cronogramStartDate: new Date(schedule.stats.inicio), resetMode: "SMART" },
+      create: { userId, cronogramStartDate: parseISODate(schedule.stats.inicio), resetMode: "SMART" },
       update: {}
     });
     return ok(settings);

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import type { ExtraStudy } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { allLessons, allProgressIds, areas, buildCronogramSchedule, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO } from "@/utils/schedule";
+import { allLessons, allProgressIds, areas, buildCronogramSchedule, dateOnlyISO, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO } from "@/utils/schedule";
 
 type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
@@ -26,6 +26,8 @@ const dayLabels = [
 const shifts = [["manha", "Manha"], ["tarde", "Tarde"], ["noite", "Noite"]];
 
 function toDateInput(value: string | Date) {
+  const dateOnly = dateOnlyISO(value);
+  if (dateOnly) return dateOnly;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? todayISO() : date.toLocaleDateString("sv-SE");
 }

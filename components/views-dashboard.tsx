@@ -5,7 +5,7 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import { BookOpenCheck, Brain, ShieldAlert, Target, TimerReset } from "lucide-react";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { allLessons, allProgressIds, areas, buildCronogramSchedule, parseISODate, schedule, todayISO } from "@/utils/schedule";
+import { allLessons, allProgressIds, areas, buildCronogramSchedule, dateOnlyISO, parseISODate, schedule, todayISO } from "@/utils/schedule";
 
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type ErrorNote = { id: string; tema: string; materia: string | null; erro: string; revisao: string | null; flashcard: string | null; dificuldade: string | null; data: string; createdAt: string };
@@ -150,7 +150,7 @@ export function DashboardView() {
   const completedIds = useMemo(() => tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string), [tasks]);
   const completedDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => [task.externalId as string, compactDate(task.data)])), [tasks]);
   const currentSchedule = useMemo(() => buildCronogramSchedule({
-    startDate: settings?.cronogramStartDate ? compactDate(settings.cronogramStartDate) : schedule.stats.inicio,
+    startDate: settings?.cronogramStartDate ? dateOnlyISO(settings.cronogramStartDate) : schedule.stats.inicio,
     completedIds,
     completedDates,
     resetMode: settings?.resetMode || "SMART"
