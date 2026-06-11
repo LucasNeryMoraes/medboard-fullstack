@@ -73,8 +73,10 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
   const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "", observacoes: "", feitas: "", acertos: "", erros: "" });
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const completedDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => [task.externalId as string, toDateInput(task.data)])), [tasks]);
-  const currentSchedule = useMemo(() => buildCronogramSchedule({ startDate: store.cronogramStartDate, completedIds: store.doneIds, completedDates, resetMode: store.cronogramResetMode }), [completedDates, store.cronogramResetMode, store.cronogramStartDate, store.doneIds]);
+  const activeStartDate = settingsLoaded ? store.cronogramStartDate : schedule.stats.inicio;
+  const currentSchedule = useMemo(() => buildCronogramSchedule({ startDate: activeStartDate, completedIds: store.doneIds, completedDates, resetMode: store.cronogramResetMode }), [activeStartDate, completedDates, store.cronogramResetMode, store.doneIds]);
   const selectedWeek = store.week || currentSchedule.rows.find((row) => row.data === todayISO())?.semana || currentSchedule.semanas[0];
   const totalProgressIds = useMemo(() => allProgressIds(currentSchedule.rows), [currentSchedule.rows]);
   const extraProgressIds = useMemo(() => new Set(store.extraStudies.map((study) => study.id)), [store.extraStudies]);
@@ -102,6 +104,7 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
         setTasks(tasks);
         setFlashcards(flashcards);
         store.setCronogramSettings({ cronogramStartDate: toDateInput(settings.cronogramStartDate), resetMode: settings.resetMode });
+        setSettingsLoaded(true);
         store.setDoneIds(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
         store.setLessonQuestions(Object.fromEntries(questions.map((item) => [item.lessonId, {
           done: item.done,
@@ -139,6 +142,8 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           .filter((study) => !existingExtraIds.has(study.id));
         store.setExtraStudies([...extraTasks, ...legacyExtraStudies]);
       } catch {
+        store.setCronogramSettings({ cronogramStartDate: schedule.stats.inicio, resetMode: "SMART" });
+        setSettingsLoaded(true);
         // Modo demo ou sessao expirada: mantem a experiencia local.
       }
     }
