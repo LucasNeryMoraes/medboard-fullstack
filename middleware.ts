@@ -9,5 +9,5 @@ export default function middleware(...args: Parameters<typeof authMiddleware>) {
 }
 
 export const config = {
-  matcher: ["/((?!api/auth|api/register|login|cadastro|_next|favicon.ico).*)"]
+  matcher: ["/((?!api/auth|api/register|login|cadastro|esqueci-senha|resetar-senha|_next|favicon.ico).*)"]
 };

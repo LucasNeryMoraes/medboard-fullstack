@@ -9,6 +9,20 @@ export const registerSchema = loginSchema.extend({
   nome: z.string().min(2).max(100)
 });
 
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(8),
+  newPassword: z.string().min(8)
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email()
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(32),
+  password: z.string().min(8)
+});
+
 export const taskSchema = z.object({
   externalId: z.string().optional(),
   titulo: z.string().min(1),

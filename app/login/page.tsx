@@ -18,7 +18,7 @@ export default function LoginPage() {
   async function onSubmit(data: FormData) {
     const result = await signIn("credentials", { ...data, redirect: false });
     if (result?.error) {
-      toast.error("E-mail ou senha inválidos");
+      toast.error("E-mail ou senha invalidos");
       return;
     }
     router.push("/");
@@ -37,7 +37,8 @@ export default function LoginPage() {
           <input className="input" type="password" placeholder="Senha" {...register("password")} />
           <button className="btn-primary" disabled={isSubmitting}>Entrar</button>
         </form>
-        <p className="mt-4 text-center text-sm text-slate-500">Ainda não tem conta? <Link className="font-bold text-brand-600" href="/cadastro">Criar cadastro</Link></p>
+        <p className="mt-3 text-center text-sm"><Link className="font-bold text-brand-600" href="/esqueci-senha">Esqueci minha senha</Link></p>
+        <p className="mt-4 text-center text-sm text-slate-500">Ainda nao tem conta? <Link className="font-bold text-brand-600" href="/cadastro">Criar cadastro</Link></p>
       </section>
     </main>
   );

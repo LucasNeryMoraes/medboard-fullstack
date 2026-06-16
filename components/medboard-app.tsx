@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { signOut } from "next-auth/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTheme } from "next-themes";
-import { BarChart3, CalendarCheck2, CalendarDays, Check, Clock3, LogOut, Moon, NotebookTabs, Pause, Play, Search, Sun, Trophy } from "lucide-react";
+import { BarChart3, CalendarCheck2, CalendarDays, Check, Clock3, KeyRound, LogOut, Moon, NotebookTabs, Pause, Play, Sun, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { DashboardView } from "@/components/views-dashboard";
 import { TodayView } from "@/components/views-today";
@@ -102,6 +102,9 @@ export function MedboardApp({ userName }: { userName: string }) {
           ))}
         </nav>
         <div className="mt-auto grid gap-2">
+          <a className="btn justify-start bg-white/10 text-white" href="/alterar-senha">
+            <KeyRound size={18} /> Alterar senha
+          </a>
           <button className="btn justify-start bg-white/10 text-white" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />} Tema
           </button>
