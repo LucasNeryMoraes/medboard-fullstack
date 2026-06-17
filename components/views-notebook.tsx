@@ -178,6 +178,7 @@ export function NotebookView() {
   const [flashTimerAccumulated, setFlashTimerAccumulated] = useState(0);
   const [flashTimerRunning, setFlashTimerRunning] = useState(false);
   const [flashTimerNow, setFlashTimerNow] = useState(Date.now());
+  const [flashTimerSaved, setFlashTimerSaved] = useState(false);
   const [showFlashList, setShowFlashList] = useState(false);
   const handledFlashRequest = useRef(0);
   const [manageArea, setManageArea] = useState("Todas");
@@ -258,26 +259,36 @@ export function NotebookView() {
 
   function startFlashTimer(totalCards: number) {
     setFlashTimerAccumulated(0);
-    setFlashTimerStartedAt(totalCards ? Date.now() : null);
+    setFlashTimerStartedAt(null);
     setFlashTimerNow(Date.now());
-    setFlashTimerRunning(totalCards > 0);
+    setFlashTimerRunning(false);
+    setFlashTimerSaved(!totalCards);
   }
 
-  function toggleFlashTimer() {
-    if (flashTimerRunning) {
-      setFlashTimerAccumulated(flashElapsedSeconds);
-      setFlashTimerStartedAt(null);
-      setFlashTimerRunning(false);
-      return;
-    }
+  function beginFlashTimer() {
     if (!flashSession.length) return;
+    if (flashTimerSaved) {
+      setFlashTimerAccumulated(0);
+      setFlashTimerSaved(false);
+    }
     setFlashTimerStartedAt(Date.now());
     setFlashTimerNow(Date.now());
     setFlashTimerRunning(true);
   }
 
+  function pauseFlashTimer() {
+    if (flashTimerRunning) {
+      setFlashTimerAccumulated(flashElapsedSeconds);
+      setFlashTimerStartedAt(null);
+      setFlashTimerRunning(false);
+    }
+  }
+
   async function saveFlashcardStudyTime(seconds: number) {
-    if (seconds < 5) return;
+    if (seconds < 5) {
+      toast.warning("Tempo muito curto para registrar nas horas estudadas.");
+      return false;
+    }
     try {
       await api("/api/productivity", {
         method: "POST",
@@ -289,8 +300,23 @@ export function NotebookView() {
           observacoes: `sistema:Flashcards; revisao de flashcards; ${flashSession.length} card(s)`
         })
       });
+      toast.success("Tempo de flashcards salvo nas horas estudadas.");
+      return true;
     } catch {
       toast.warning("Cronometro da revisao ficou local, mas nao consegui salvar as horas agora.");
+      return false;
+    }
+  }
+
+  async function finishFlashTimer() {
+    const seconds = flashElapsedSeconds;
+    pauseFlashTimer();
+    const saved = await saveFlashcardStudyTime(seconds);
+    if (saved) {
+      setFlashTimerAccumulated(seconds);
+      setFlashTimerStartedAt(null);
+      setFlashTimerRunning(false);
+      setFlashTimerSaved(true);
     }
   }
 
@@ -557,7 +583,10 @@ export function NotebookView() {
       setFlashTimerAccumulated(0);
       setFlashTimerStartedAt(null);
       setFlashTimerRunning(false);
-      await saveFlashcardStudyTime(seconds);
+      if (!flashTimerSaved && seconds >= 5) {
+        const saved = await saveFlashcardStudyTime(seconds);
+        setFlashTimerSaved(saved);
+      }
       if (flashcardReturnTab) {
         setTab(flashcardReturnTab);
         clearFlashcardReturn();
@@ -792,7 +821,10 @@ export function NotebookView() {
         onRate={rateFlashcard}
         elapsedSeconds={flashElapsedSeconds}
         timerRunning={flashTimerRunning}
-        onToggleTimer={toggleFlashTimer}
+        timerSaved={flashTimerSaved}
+        onStartTimer={beginFlashTimer}
+        onPauseTimer={pauseFlashTimer}
+        onFinishTimer={finishFlashTimer}
       />
 
       <section className="card p-5">
@@ -924,7 +956,7 @@ function QuestionPractice({ note, index, total, revealed, selected, onSelected, 
   );
 }
 
-function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, index, total, showAnswer, setShowAnswer, onPrevious, onNext, onDelete, onRate, elapsedSeconds, timerRunning, onToggleTimer }: {
+function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, index, total, showAnswer, setShowAnswer, onPrevious, onNext, onDelete, onRate, elapsedSeconds, timerRunning, timerSaved, onStartTimer, onPauseTimer, onFinishTimer }: {
   area: string;
   setArea: (value: string) => void;
   mode: string;
@@ -941,8 +973,12 @@ function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, inde
   onRate: (label: string, days: number) => void;
   elapsedSeconds: number;
   timerRunning: boolean;
-  onToggleTimer: () => void;
+  timerSaved: boolean;
+  onStartTimer: () => void;
+  onPauseTimer: () => void;
+  onFinishTimer: () => void;
 }) {
+  const hasTime = elapsedSeconds > 0;
   return (
     <article className="card p-5">
       <h2 className="text-xl font-black">Revisar flashcards</h2>
@@ -965,7 +1001,9 @@ function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, inde
               <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 font-mono text-slate-900 dark:bg-slate-950 dark:text-slate-100"><Clock3 size={15} /> {formatFlashTimer(elapsedSeconds)}</span>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className="btn-secondary px-3" onClick={onToggleTimer}>{timerRunning ? "Pausar tempo" : "Continuar tempo"}</button>
+              <button className="btn-secondary px-3" disabled={timerRunning} onClick={onStartTimer}>{hasTime && !timerSaved ? "Continuar" : "Iniciar"}</button>
+              <button className="btn-secondary px-3" disabled={!timerRunning} onClick={onPauseTimer}>Pausar</button>
+              <button className="btn-primary bg-red-700 px-3 hover:bg-red-800" disabled={!hasTime || timerSaved} onClick={onFinishTimer}>{timerSaved ? "Tempo salvo" : "Finalizar"}</button>
               {onDelete && <button className="btn-secondary px-3" onClick={onDelete}><Trash2 size={16} /></button>}
             </div>
           </div>
