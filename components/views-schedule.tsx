@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Circle, Pause, Play, RotateCcw, Search } from "lucide-react";
+import { Check, ChevronDown, Circle, Pause, Play, RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import type { ExtraStudy } from "@/hooks/use-medboard-store";
@@ -73,6 +73,7 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
   const store = useMedboardStore();
   const todayMode = mode === "today";
   const [overdueMode, setOverdueMode] = useState<"pending" | "all">("pending");
+  const [showOverdueLessons, setShowOverdueLessons] = useState(false);
   const [extraForm, setExtraForm] = useState({ titulo: "", materia: "", data: todayISO(), horas: "", observacoes: "", feitas: "", acertos: "", erros: "" });
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
@@ -484,20 +485,30 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           )}
 
           <div className="grid gap-3">
-            <h3 className="text-sm font-black uppercase tracking-wider text-slate-400">Aulas atrasadas</h3>
-          {overdueLessons.map((lesson) => (
-            <article key={lesson.id} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <div className="font-black text-fuchsia-600">{lesson.dataBR} - {lesson.disciplina}</div>
-                  <div className="mt-2"><LateBadge date={lesson.data} /></div>
-                </div>
-                <div className="text-sm text-slate-600 dark:text-slate-300 md:text-right">{lesson.aula}<br />{lesson.semana} - {lesson.horario}</div>
+            <button className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left dark:border-white/10 dark:bg-slate-900" onClick={() => setShowOverdueLessons((value) => !value)} aria-expanded={showOverdueLessons}>
+              <span>
+                <span className="block text-sm font-black uppercase tracking-wider text-slate-400">Aulas atrasadas</span>
+                <span className="mt-1 block text-sm text-slate-500">{overdueLessons.length} item(ns) {showOverdueLessons ? "visiveis" : "recolhidos"}</span>
+              </span>
+              <ChevronDown className={`text-slate-400 transition ${showOverdueLessons ? "rotate-180" : ""}`} size={20} />
+            </button>
+            {showOverdueLessons && (
+              <div className="grid gap-3">
+                {overdueLessons.map((lesson) => (
+                  <article key={lesson.id} className="rounded-2xl border border-slate-200 p-4 dark:border-white/10">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <div className="font-black text-fuchsia-600">{lesson.dataBR} - {lesson.disciplina}</div>
+                        <div className="mt-2"><LateBadge date={lesson.data} /></div>
+                      </div>
+                      <div className="text-sm text-slate-600 dark:text-slate-300 md:text-right">{lesson.aula}<br />{lesson.semana} - {lesson.horario}</div>
+                    </div>
+                    <button className="mt-4 w-full rounded-xl bg-violet-950 px-4 py-2.5 text-sm font-black text-white" onClick={() => syncTask(lesson.id, true, { titulo: lesson.aula, data: lesson.data, tipo: "AULA", materia: lesson.disciplina })}>Marcar como assistida</button>
+                  </article>
+                ))}
+                {!overdueLessons.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma aula atrasada encontrada.</div>}
               </div>
-              <button className="mt-4 w-full rounded-xl bg-violet-950 px-4 py-2.5 text-sm font-black text-white" onClick={() => syncTask(lesson.id, true, { titulo: lesson.aula, data: lesson.data, tipo: "AULA", materia: lesson.disciplina })}>Marcar como assistida</button>
-            </article>
-          ))}
-          {!overdueLessons.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma aula atrasada encontrada.</div>}
+            )}
           </div>
 
           {!todayMode && (
@@ -780,30 +791,42 @@ function OverdueReviewsGroup({ reviews, storeDoneIds, syncTask, lessonQuestions,
   lessonQuestions: Record<string, LessonQuestionValue>;
   syncQuestion: (lessonId: string, value: Partial<LessonQuestionValue>) => Promise<void>;
 }) {
+  const [open, setOpen] = useState(false);
+
   return (
     <div className="grid gap-3">
-      <h3 className="text-sm font-black uppercase tracking-wider text-slate-400">Revisoes atrasadas</h3>
-      {reviews.map((review) => {
-        const done = storeDoneIds.includes(review.id);
-        const q = lessonQuestions[review.id] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
-        return (
-          <div key={review.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10">
-            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-              <span>
-                <strong className="block">{review.tipoRevisao} - {review.disciplina}</strong>
-                <span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span>
-                <span className="mt-1 block text-xs text-slate-500">{review.dataBR} - {review.semana}</span>
-              </span>
-              <span className="flex flex-wrap items-center gap-2 md:justify-end">
-                <LateBadge date={review.data} />
-                <button className="btn-secondary h-10" onClick={() => syncTask(review.id, !done, { titulo: review.aula, data: review.data, tipo: "REVISAO", materia: review.disciplina })}>{done ? "Revisao realizada" : "Marcar revisao"}</button>
-              </span>
+      <button className="flex w-full items-center justify-between rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-left dark:border-rose-500/20 dark:bg-rose-500/10" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+        <span>
+          <span className="block text-sm font-black uppercase tracking-wider text-rose-500 dark:text-rose-200">Revisoes espacadas atrasadas</span>
+          <span className="mt-1 block text-sm text-slate-500 dark:text-slate-300">{reviews.length} item(ns) {open ? "visiveis" : "recolhidos"}</span>
+        </span>
+        <ChevronDown className={`text-rose-400 transition ${open ? "rotate-180" : ""}`} size={20} />
+      </button>
+      {open && (
+        <div className="grid gap-3">
+          {reviews.map((review) => {
+          const done = storeDoneIds.includes(review.id);
+          const q = lessonQuestions[review.id] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
+          return (
+            <div key={review.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10">
+              <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                <span>
+                  <strong className="block">{review.tipoRevisao} - {review.disciplina}</strong>
+                  <span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span>
+                  <span className="mt-1 block text-xs text-slate-500">{review.dataBR} - {review.semana}</span>
+                </span>
+                <span className="flex flex-wrap items-center gap-2 md:justify-end">
+                  <LateBadge date={review.data} />
+                  <button className="btn-secondary h-10" onClick={() => syncTask(review.id, !done, { titulo: review.aula, data: review.data, tipo: "REVISAO", materia: review.disciplina })}>{done ? "Revisao realizada" : "Marcar revisao"}</button>
+                </span>
+              </div>
+              <ReviewQuestionFields id={review.id} q={q} syncQuestion={syncQuestion} label="Questoes desta revisao concluidas" placeholder="Questoes feitas na revisao atrasada, principais erros e pontos para reforcar..." />
             </div>
-            <ReviewQuestionFields id={review.id} q={q} syncQuestion={syncQuestion} label="Questoes desta revisao concluidas" placeholder="Questoes feitas na revisao atrasada, principais erros e pontos para reforcar..." />
-          </div>
-        );
-      })}
-      {!reviews.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma revisao atrasada encontrada.</div>}
+          );
+        })}
+          {!reviews.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma revisao atrasada encontrada.</div>}
+        </div>
+      )}
     </div>
   );
 }
