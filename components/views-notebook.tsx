@@ -51,25 +51,6 @@ type SimAnswer = { noteId: string; selected: string; correct: boolean };
 
 const choices = ["A", "B", "C", "D", "E"];
 const quantities = [5, 10, 20, 30, 50];
-const systemOptions = [
-  "Cardiologia",
-  "Pneumologia",
-  "Endocrinologia",
-  "Nefrologia",
-  "Gastroenterologia",
-  "Infectologia",
-  "Neurologia",
-  "Reumatologia",
-  "Hematologia",
-  "Dermatologia",
-  "Psiquiatria",
-  "Ginecologia",
-  "Obstetricia",
-  "Pediatria",
-  "Preventiva",
-  "Cirurgia",
-  "Emergencia"
-];
 
 const emptyQuestion = {
   materia: areas[0],
@@ -85,7 +66,8 @@ const emptyQuestion = {
 
 const emptyCard = {
   materia: areas[0],
-  tag: systemOptions[0],
+  tema: "",
+  sistema: "",
   pergunta: "",
   resposta: "",
   imagem: ""
@@ -141,6 +123,21 @@ function formatFlashTimer(seconds: number) {
   const minutes = Math.floor((safe % 3600) / 60);
   const secs = safe % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function parseFlashTag(tag?: string | null) {
+  const raw = tag || "";
+  const tema = raw.match(/(?:^|;)\s*tema:([^;]+)/i)?.[1]?.trim();
+  const sistema = raw.match(/(?:^|;)\s*sistema:([^;]+)/i)?.[1]?.trim();
+  if (tema || sistema) return { tema: tema || "", sistema: sistema || "" };
+  return { tema: raw, sistema: "" };
+}
+
+function buildFlashTag(card: Pick<typeof emptyCard, "tema" | "sistema">) {
+  return [
+    card.tema.trim() ? `tema:${card.tema.trim()}` : "",
+    card.sistema.trim() ? `sistema:${card.sistema.trim()}` : ""
+  ].filter(Boolean).join("; ") || undefined;
 }
 
 async function fileToDataUrl(file?: File) {
@@ -232,7 +229,8 @@ export function NotebookView() {
     flashcards: flashcards.filter((card) => card.materia === area || card.deck === area).length
   })), [flashcards]);
   const systems = useMemo(() => Object.entries(flashcards.reduce<Record<string, number>>((acc, card) => {
-    const key = card.tag || inferSystem(card.pergunta);
+    const parsed = parseFlashTag(card.tag);
+    const key = parsed.sistema || "Sistema nao informado";
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {})).map(([system, total]) => ({ system, total })).sort((a, b) => b.total - a.total), [flashcards]);
@@ -499,7 +497,7 @@ export function NotebookView() {
         resposta: cardForm.resposta,
         materia: cardForm.materia,
         deck: cardForm.materia,
-        tag: cardForm.tag,
+        tag: buildFlashTag(cardForm),
         imagem: cardForm.imagem || undefined,
         dueDate: editingCardId ? undefined : nextDate(1),
         intervalDays: editingCardId ? undefined : 1
@@ -513,10 +511,12 @@ export function NotebookView() {
   }
 
   function editFlashcard(card: Flashcard) {
+    const parsedTag = parseFlashTag(card.tag);
     setEditingCardId(card.id);
     setCardForm({
       materia: card.materia || card.deck || areas[0],
-      tag: card.tag || (systemOptions.includes(inferSystem(card.pergunta)) ? inferSystem(card.pergunta) : systemOptions[0]),
+      tema: parsedTag.tema,
+      sistema: parsedTag.sistema,
       pergunta: card.pergunta,
       resposta: card.resposta,
       imagem: card.imagem || ""
@@ -752,11 +752,10 @@ export function NotebookView() {
             <MiniMetric title="Revisados hoje" value={flashStats.reviewedToday} />
           </div>
           <div className="mt-4 grid gap-3">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-3">
               <select className="input" value={cardForm.materia} onChange={(event) => setCardForm({ ...cardForm, materia: event.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
-              <select className="input" value={cardForm.tag} onChange={(event) => setCardForm({ ...cardForm, tag: event.target.value })}>
-                {systemOptions.map((system) => <option key={system}>{system}</option>)}
-              </select>
+              <input className="input" placeholder="Tema. Ex.: HAS, apendicite, puerperio..." value={cardForm.tema} onChange={(event) => setCardForm({ ...cardForm, tema: event.target.value })} />
+              <input className="input" placeholder="Sistema opcional. Ex.: Trauma, SUS, Urologia..." value={cardForm.sistema} onChange={(event) => setCardForm({ ...cardForm, sistema: event.target.value })} />
             </div>
             <textarea className="input min-h-24" placeholder="Pergunta do flashcard" value={cardForm.pergunta} onChange={(event) => setCardForm({ ...cardForm, pergunta: event.target.value })} />
             <textarea className="input min-h-24" placeholder="Resposta e explicacao" value={cardForm.resposta} onChange={(event) => setCardForm({ ...cardForm, resposta: event.target.value })} />
@@ -791,7 +790,7 @@ export function NotebookView() {
                     <span className="text-slate-500">{item.total} card(s)</span>
                   </div>
                 ))}
-                {!systems.length && <Empty text="Os sistemas serao inferidos pelas tags e perguntas." />}
+                {!systems.length && <Empty text="Os sistemas aparecem quando voce preencher esse campo opcional nos flashcards." />}
               </div>
             </div>
           </div>
