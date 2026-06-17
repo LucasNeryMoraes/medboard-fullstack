@@ -63,7 +63,8 @@ function inferSystem(text: string) {
     ["Ginecologia", ["gineco", "gesta", "pre-natal", "obst", "parto"]],
     ["Pediatria", ["pedi", "crianca", "neonato", "vacina"]]
   ];
-  return entries.find(([, words]) => words.some((word) => normalized.includes(word)))?.[0] || "Sem sistema definido";
+  if (normalized.includes("flashcard")) return "Flashcards";
+  return entries.find(([, words]) => words.some((word) => normalized.includes(word)))?.[0] || "Sistema nao informado";
 }
 
 function performanceTotal(item: Pick<Performance, "questoes" | "acertos" | "erros">) {
@@ -297,8 +298,6 @@ export function DashboardView() {
     return acc;
   }, {})).filter(([, count]) => count > 1);
   const resolvedErrors = errors.filter((item) => ["Facil", "Dificuldade baixa", "Acertei depois"].includes(item.dificuldade || "")).length;
-  const errorsWithoutFlashcard = errors.filter((item) => !item.flashcard && !item.revisao).length;
-
   const fragileTopics = Object.values(errors.reduce<Record<string, { tema: string; materia: string; erros: number; flashcards: number; pendentes: number; ultimoErro: string }>>((acc, item) => {
     const key = `${item.tema || "Sem assunto"}-${item.materia || "Sem area"}`;
     const relatedCards = flashcards.filter((card) => (card.tag || card.pergunta || "").toLowerCase().includes((item.tema || "").toLowerCase()) || card.materia === item.materia);
@@ -499,7 +498,7 @@ export function DashboardView() {
             <Metric title="Total de erros" value={errors.length} />
             <Metric title="Erros abertos" value={Math.max(0, errors.length - resolvedErrors)} />
             <Metric title="Erros recorrentes" value={recurringErrors.length} />
-            <Metric title="Sem flashcard" value={errorsWithoutFlashcard} />
+            <Metric title="Resolvidos" value={resolvedErrors} />
           </div>
           <h3 className="mt-5 text-sm font-black">Top assuntos mais frageis</h3>
           <div className="mt-3 grid gap-2">
@@ -523,7 +522,6 @@ export function DashboardView() {
           <h3 className="mt-5 text-sm font-black">Funil de aprendizagem</h3>
           <div className="mt-3 grid gap-2">
             <HorizontalValue label="Erro registrado" value={`${errors.length}`} pct={100} />
-            <HorizontalValue label="Virou flashcard" value={`${errors.length - errorsWithoutFlashcard}`} pct={errors.length ? Math.round(((errors.length - errorsWithoutFlashcard) / errors.length) * 100) : 0} />
             <HorizontalValue label="Foi revisado" value={`${flashAttempts}`} pct={flashcards.length ? Math.round((flashAttempts / flashcards.length) * 100) : 0} />
             <HorizontalValue label="Tema corrigido" value={`${resolvedErrors}`} pct={errors.length ? Math.round((resolvedErrors / errors.length) * 100) : 0} />
           </div>

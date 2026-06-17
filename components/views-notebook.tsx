@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpenCheck, Database, FileQuestion, ImagePlus, Pencil, Plus, RotateCcw, Shuffle, Trash2 } from "lucide-react";
+import { BookOpenCheck, Clock3, Database, FileQuestion, ImagePlus, Pencil, Plus, RotateCcw, Shuffle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
@@ -51,6 +51,25 @@ type SimAnswer = { noteId: string; selected: string; correct: boolean };
 
 const choices = ["A", "B", "C", "D", "E"];
 const quantities = [5, 10, 20, 30, 50];
+const systemOptions = [
+  "Cardiologia",
+  "Pneumologia",
+  "Endocrinologia",
+  "Nefrologia",
+  "Gastroenterologia",
+  "Infectologia",
+  "Neurologia",
+  "Reumatologia",
+  "Hematologia",
+  "Dermatologia",
+  "Psiquiatria",
+  "Ginecologia",
+  "Obstetricia",
+  "Pediatria",
+  "Preventiva",
+  "Cirurgia",
+  "Emergencia"
+];
 
 const emptyQuestion = {
   materia: areas[0],
@@ -66,7 +85,7 @@ const emptyQuestion = {
 
 const emptyCard = {
   materia: areas[0],
-  tag: "",
+  tag: systemOptions[0],
   pergunta: "",
   resposta: "",
   imagem: ""
@@ -113,7 +132,15 @@ function inferSystem(text: string) {
     ["Ginecologia", ["gineco", "gesta", "pre-natal", "obst", "parto"]],
     ["Pediatria", ["pedi", "crianca", "neonato", "vacina"]]
   ];
-  return entries.find(([, words]) => words.some((word) => normalized.includes(word)))?.[0] || "Sem sistema definido";
+  return entries.find(([, words]) => words.some((word) => normalized.includes(word)))?.[0] || "Sistema nao informado";
+}
+
+function formatFlashTimer(seconds: number) {
+  const safe = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 async function fileToDataUrl(file?: File) {
@@ -147,6 +174,10 @@ export function NotebookView() {
   const [flashSession, setFlashSession] = useState<Flashcard[]>([]);
   const [flashIndex, setFlashIndex] = useState(0);
   const [showFlashAnswer, setShowFlashAnswer] = useState(false);
+  const [flashTimerStartedAt, setFlashTimerStartedAt] = useState<number | null>(null);
+  const [flashTimerAccumulated, setFlashTimerAccumulated] = useState(0);
+  const [flashTimerRunning, setFlashTimerRunning] = useState(false);
+  const [flashTimerNow, setFlashTimerNow] = useState(Date.now());
   const [showFlashList, setShowFlashList] = useState(false);
   const handledFlashRequest = useRef(0);
   const [manageArea, setManageArea] = useState("Todas");
@@ -188,6 +219,7 @@ export function NotebookView() {
   const currentFlashcard = flashSession[flashIndex];
   const simCorrectCount = simAnswers.filter((answer) => answer.correct).length;
   const todayKey = compactDate(new Date());
+  const flashElapsedSeconds = flashTimerAccumulated + (flashTimerRunning && flashTimerStartedAt ? Math.max(0, Math.round((flashTimerNow - flashTimerStartedAt) / 1000)) : 0);
   const flashStats = useMemo(() => ({
     total: flashcards.length,
     pending: flashcards.filter((card) => compactDate(card.dueDate || card.createdAt) <= todayKey).length,
@@ -199,10 +231,16 @@ export function NotebookView() {
     flashcards: flashcards.filter((card) => card.materia === area || card.deck === area).length
   })), [flashcards]);
   const systems = useMemo(() => Object.entries(flashcards.reduce<Record<string, number>>((acc, card) => {
-    const key = inferSystem(`${card.tag || ""} ${card.pergunta}`);
+    const key = card.tag || inferSystem(card.pergunta);
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {})).map(([system, total]) => ({ system, total })).sort((a, b) => b.total - a.total), [flashcards]);
+
+  useEffect(() => {
+    if (!flashTimerRunning) return;
+    const timer = window.setInterval(() => setFlashTimerNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [flashTimerRunning]);
 
   useEffect(() => {
     if (!flashcardReviewRequest || !flashcards.length) return;
@@ -214,8 +252,47 @@ export function NotebookView() {
     setFlashSession(shuffle(due));
     setFlashIndex(0);
     setShowFlashAnswer(false);
+    startFlashTimer(due.length);
     if (!due.length) toast.success("Nenhum flashcard pendente agora.");
   }, [flashcardReviewRequest, flashcards]);
+
+  function startFlashTimer(totalCards: number) {
+    setFlashTimerAccumulated(0);
+    setFlashTimerStartedAt(totalCards ? Date.now() : null);
+    setFlashTimerNow(Date.now());
+    setFlashTimerRunning(totalCards > 0);
+  }
+
+  function toggleFlashTimer() {
+    if (flashTimerRunning) {
+      setFlashTimerAccumulated(flashElapsedSeconds);
+      setFlashTimerStartedAt(null);
+      setFlashTimerRunning(false);
+      return;
+    }
+    if (!flashSession.length) return;
+    setFlashTimerStartedAt(Date.now());
+    setFlashTimerNow(Date.now());
+    setFlashTimerRunning(true);
+  }
+
+  async function saveFlashcardStudyTime(seconds: number) {
+    if (seconds < 5) return;
+    try {
+      await api("/api/productivity", {
+        method: "POST",
+        body: JSON.stringify({
+          materia: "Flashcards",
+          horas: seconds / 3600,
+          rendimento: 100,
+          data: new Date(),
+          observacoes: `sistema:Flashcards; revisao de flashcards; ${flashSession.length} card(s)`
+        })
+      });
+    } catch {
+      toast.warning("Cronometro da revisao ficou local, mas nao consegui salvar as horas agora.");
+    }
+  }
 
   function resetForm(materia = questionForm.materia) {
     setQuestionForm({ ...emptyQuestion, materia });
@@ -413,7 +490,7 @@ export function NotebookView() {
     setEditingCardId(card.id);
     setCardForm({
       materia: card.materia || card.deck || areas[0],
-      tag: card.tag || "",
+      tag: card.tag || (systemOptions.includes(inferSystem(card.pergunta)) ? inferSystem(card.pergunta) : systemOptions[0]),
       pergunta: card.pergunta,
       resposta: card.resposta,
       imagem: card.imagem || ""
@@ -438,6 +515,7 @@ export function NotebookView() {
     setFlashSession(shuffle(filtered));
     setFlashIndex(0);
     setShowFlashAnswer(false);
+    startFlashTimer(filtered.length);
     if (!filtered.length) toast.error("Nenhum flashcard encontrado para essa selecao.");
   }
 
@@ -475,6 +553,11 @@ export function NotebookView() {
     setFlashSession((current) => current.map((card) => card.id === updated.id ? updated : card));
     setShowFlashAnswer(false);
     if (flashIndex >= flashSession.length - 1) {
+      const seconds = flashElapsedSeconds;
+      setFlashTimerAccumulated(0);
+      setFlashTimerStartedAt(null);
+      setFlashTimerRunning(false);
+      await saveFlashcardStudyTime(seconds);
       if (flashcardReturnTab) {
         setTab(flashcardReturnTab);
         clearFlashcardReturn();
@@ -642,7 +725,9 @@ export function NotebookView() {
           <div className="mt-4 grid gap-3">
             <div className="grid gap-3 md:grid-cols-2">
               <select className="input" value={cardForm.materia} onChange={(event) => setCardForm({ ...cardForm, materia: event.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
-              <input className="input" placeholder="Tag opcional. Ex.: HAS, arritmia..." value={cardForm.tag} onChange={(event) => setCardForm({ ...cardForm, tag: event.target.value })} />
+              <select className="input" value={cardForm.tag} onChange={(event) => setCardForm({ ...cardForm, tag: event.target.value })}>
+                {systemOptions.map((system) => <option key={system}>{system}</option>)}
+              </select>
             </div>
             <textarea className="input min-h-24" placeholder="Pergunta do flashcard" value={cardForm.pergunta} onChange={(event) => setCardForm({ ...cardForm, pergunta: event.target.value })} />
             <textarea className="input min-h-24" placeholder="Resposta e explicacao" value={cardForm.resposta} onChange={(event) => setCardForm({ ...cardForm, resposta: event.target.value })} />
@@ -705,6 +790,9 @@ export function NotebookView() {
         }}
         onDelete={currentFlashcard ? () => removeFlashcard(currentFlashcard.id) : undefined}
         onRate={rateFlashcard}
+        elapsedSeconds={flashElapsedSeconds}
+        timerRunning={flashTimerRunning}
+        onToggleTimer={toggleFlashTimer}
       />
 
       <section className="card p-5">
@@ -836,7 +924,7 @@ function QuestionPractice({ note, index, total, revealed, selected, onSelected, 
   );
 }
 
-function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, index, total, showAnswer, setShowAnswer, onPrevious, onNext, onDelete, onRate }: {
+function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, index, total, showAnswer, setShowAnswer, onPrevious, onNext, onDelete, onRate, elapsedSeconds, timerRunning, onToggleTimer }: {
   area: string;
   setArea: (value: string) => void;
   mode: string;
@@ -851,6 +939,9 @@ function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, inde
   onNext: () => void;
   onDelete?: () => void;
   onRate: (label: string, days: number) => void;
+  elapsedSeconds: number;
+  timerRunning: boolean;
+  onToggleTimer: () => void;
 }) {
   return (
     <article className="card p-5">
@@ -868,9 +959,15 @@ function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, inde
       </div>
       {current ? (
         <div className="mt-5 grid gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-black text-violet-950 dark:text-violet-100">
-            <span>{index + 1} de {total}</span>
-            {onDelete && <button className="btn-secondary px-3" onClick={onDelete}><Trash2 size={16} /></button>}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-100 bg-slate-50 p-3 dark:border-violet-400/20 dark:bg-slate-900">
+            <div className="flex flex-wrap items-center gap-3 text-sm font-black text-violet-950 dark:text-violet-100">
+              <span>{index + 1} de {total}</span>
+              <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 font-mono text-slate-900 dark:bg-slate-950 dark:text-slate-100"><Clock3 size={15} /> {formatFlashTimer(elapsedSeconds)}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-secondary px-3" onClick={onToggleTimer}>{timerRunning ? "Pausar tempo" : "Continuar tempo"}</button>
+              {onDelete && <button className="btn-secondary px-3" onClick={onDelete}><Trash2 size={16} /></button>}
+            </div>
           </div>
           <div className="grid min-h-56 content-center rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-6 dark:border-fuchsia-400/30 dark:from-violet-500/10 dark:to-fuchsia-500/10">
             <span className="text-xs font-black uppercase tracking-wider text-fuchsia-600">{showAnswer ? "Verso do flashcard" : "Frente do flashcard"}</span>

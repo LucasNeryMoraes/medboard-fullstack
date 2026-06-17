@@ -11,6 +11,25 @@ type Productivity = { id: string; data: string; materia: string | null; horas: n
 type FlashcardRecord = { id: string; dueDate: string; updatedAt?: string; lastDifficulty?: string | null };
 
 const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
+const systemOptions = [
+  "Cardiologia",
+  "Pneumologia",
+  "Endocrinologia",
+  "Nefrologia",
+  "Gastroenterologia",
+  "Infectologia",
+  "Neurologia",
+  "Reumatologia",
+  "Hematologia",
+  "Dermatologia",
+  "Psiquiatria",
+  "Ginecologia",
+  "Obstetricia",
+  "Pediatria",
+  "Preventiva",
+  "Cirurgia",
+  "Emergencia"
+];
 
 function formatDuration(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds));
@@ -46,7 +65,7 @@ export function TimerView() {
   const [now, setNow] = useState(Date.now());
   const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
-  const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], horas: "", observacoes: "" });
+  const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], sistema: systemOptions[0], horas: "", observacoes: "" });
   const [editingHours, setEditingHours] = useState<Record<string, string>>({});
   const [editingArea, setEditingArea] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -97,7 +116,7 @@ export function TimerView() {
           rendimento: 100,
           materia: active.area,
           data: new Date(),
-          observacoes: `cronometro:${formatDuration(seconds)}`
+          observacoes: `sistema:${active.title || active.area}; cronometro:${formatDuration(seconds)}`
         })
       });
       api("/api/timers", {
@@ -135,7 +154,13 @@ export function TimerView() {
     }
     const saved = await api<Productivity>("/api/productivity", {
       method: "POST",
-      body: JSON.stringify({ ...hoursForm, horas: clockToHours(hoursForm.horas), rendimento: 100 })
+      body: JSON.stringify({
+        data: hoursForm.data,
+        materia: hoursForm.materia,
+        horas: clockToHours(hoursForm.horas),
+        rendimento: 100,
+        observacoes: `sistema:${hoursForm.sistema}; ${hoursForm.observacoes || ""}`.trim()
+      })
     });
     setProductivity((current) => [saved, ...current]);
     setEditingHours((current) => ({ ...current, [saved.id]: hoursToClock(saved.horas) }));
@@ -239,9 +264,10 @@ export function TimerView() {
         <h2 className="text-lg font-black">Horas estudadas por matéria</h2>
         <p className="mt-1 text-sm text-slate-500">Registros manuais e do cronômetro entram aqui. Você pode corrigir horas e matéria depois de salvar.</p>
         <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-3 dark:border-violet-400/20 dark:bg-violet-500/10">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <input className="input" type="date" value={hoursForm.data} onChange={(event) => setHoursForm({ ...hoursForm, data: event.target.value })} />
             <select className="input" value={hoursForm.materia} onChange={(event) => setHoursForm({ ...hoursForm, materia: event.target.value })}>{areas.map((area) => <option key={area}>{area}</option>)}</select>
+            <select className="input" value={hoursForm.sistema} onChange={(event) => setHoursForm({ ...hoursForm, sistema: event.target.value })}>{systemOptions.map((system) => <option key={system}>{system}</option>)}</select>
             <input className="input" type="time" value={hoursForm.horas} onChange={(event) => setHoursForm({ ...hoursForm, horas: event.target.value })} />
           </div>
           <input className="input mt-3" placeholder="Observação opcional. Ex.: aula de HAS + 20 questões" value={hoursForm.observacoes} onChange={(event) => setHoursForm({ ...hoursForm, observacoes: event.target.value })} />

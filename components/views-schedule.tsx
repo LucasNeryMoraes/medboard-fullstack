@@ -10,6 +10,7 @@ import { allLessons, allProgressIds, areas, buildCronogramSchedule, dateOnlyISO,
 
 type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
+type LessonQuestionValue = { done: boolean; feitas: number; acertos: number; erros: number; observacoes: string };
 type ProductivityRecord = { id: string; materia: string | null; horas: number; data: string; observacoes: string | null };
 type FlashcardRecord = { id: string; dueDate: string; updatedAt?: string; lastDifficulty?: string | null };
 type ScheduleSettingsRecord = { cronogramStartDate: string; resetMode: "SMART" | "FULL" };
@@ -479,7 +480,7 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
         </div>
         <div className="mt-4 grid gap-5">
           {todayMode && (
-            <OverdueReviewsGroup reviews={overdueReviews} storeDoneIds={store.doneIds} syncTask={syncTask} />
+            <OverdueReviewsGroup reviews={overdueReviews} storeDoneIds={store.doneIds} syncTask={syncTask} lessonQuestions={store.lessonQuestions} syncQuestion={syncQuestion} />
           )}
 
           <div className="grid gap-3">
@@ -500,7 +501,7 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           </div>
 
           {!todayMode && (
-            <OverdueReviewsGroup reviews={overdueReviews} storeDoneIds={store.doneIds} syncTask={syncTask} />
+            <OverdueReviewsGroup reviews={overdueReviews} storeDoneIds={store.doneIds} syncTask={syncTask} lessonQuestions={store.lessonQuestions} syncQuestion={syncQuestion} />
           )}
         </div>
       </section>
@@ -701,13 +702,20 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
                         </div>
                       );
                     }),
-                    ...row.revisoesDoDia.map((review) => (
-                      <button key={review.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-2xl border border-rose-100 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10" onClick={() => syncTask(review.id, !store.doneIds.includes(review.id), { titulo: review.aula, data: row.data, tipo: "REVISAO", materia: review.disciplina })}>
-                        <span className="mt-1 grid h-6 w-6 place-items-center rounded-full border border-rose-300">{store.doneIds.includes(review.id) && <Check size={15} />}</span>
-                        <span><strong className="block">{review.tipoRevisao} - {review.disciplina}</strong><span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span></span>
-                        <span className="badge bg-white text-brand-700 dark:bg-slate-900">Revisao</span>
-                      </button>
-                    )),
+                    ...row.revisoesDoDia.map((review) => {
+                      const done = store.doneIds.includes(review.id);
+                      const q = store.lessonQuestions[review.id] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
+                      return (
+                        <div key={review.id} className="rounded-2xl border border-rose-100 bg-rose-50 p-4 dark:border-rose-500/20 dark:bg-rose-500/10">
+                          <div className="grid grid-cols-[auto_1fr_auto] items-start gap-3">
+                            <button className="mt-1 grid h-6 w-6 place-items-center rounded-full border border-rose-300" aria-label={done ? "Desmarcar revisao" : "Marcar revisao"} onClick={() => syncTask(review.id, !done, { titulo: review.aula, data: row.data, tipo: "REVISAO", materia: review.disciplina })}>{done && <Check size={15} />}</button>
+                            <span><strong className="block">{review.tipoRevisao} - {review.disciplina}</strong><span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span></span>
+                            <span className="badge bg-white text-brand-700 dark:bg-slate-900">Revisao</span>
+                          </div>
+                          <ReviewQuestionFields id={review.id} q={q} syncQuestion={syncQuestion} label="Questoes desta revisao concluidas" placeholder="Questoes feitas na revisao, principais erros e pontos para reforcar..." />
+                        </div>
+                      );
+                    }),
                     isSaturday(row.data) ? (
                       <button key={saturdaySimuladoId(row.data)} className="rounded-2xl border border-brand-100 bg-brand-50 p-4 text-left dark:border-brand-700/30 dark:bg-brand-700/10" onClick={() => syncTask(saturdaySimuladoId(row.data), !store.doneIds.includes(saturdaySimuladoId(row.data)), { titulo: "Simulado semanal", data: row.data, tipo: "SIMULADO", materia: "Simulado" })}>
                         <strong>Simulado semanal</strong><p className="text-sm text-slate-600 dark:text-slate-300">Realizar prova e correcao do fim de semana.</p>
@@ -742,31 +750,59 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
   );
 }
 
-function OverdueReviewsGroup({ reviews, storeDoneIds, syncTask }: {
+function ReviewQuestionFields({ id, q, syncQuestion, label, placeholder }: {
+  id: string;
+  q: LessonQuestionValue;
+  syncQuestion: (lessonId: string, value: Partial<LessonQuestionValue>) => Promise<void>;
+  label: string;
+  placeholder: string;
+}) {
+  return (
+    <div className="mt-3 rounded-2xl border border-violet-200 bg-white/70 p-4 dark:border-violet-400/20 dark:bg-slate-950/40">
+      <label className="flex items-center gap-2 text-sm font-black text-violet-950 dark:text-violet-100">
+        <input type="checkbox" checked={q.done} onChange={(event) => syncQuestion(id, { done: event.target.checked })} />
+        {label}
+      </label>
+      <div className="mt-4 grid gap-2 md:grid-cols-3">
+        <input className="input" type="number" min="0" placeholder="Questoes feitas" value={q.feitas || ""} onChange={(event) => syncQuestion(id, { feitas: Number(event.target.value || 0) })} />
+        <input className="input" type="number" min="0" placeholder="Acertos" value={q.acertos || ""} onChange={(event) => syncQuestion(id, { acertos: Number(event.target.value || 0) })} />
+        <input className="input" type="number" min="0" placeholder="Erros" value={q.erros || ""} onChange={(event) => syncQuestion(id, { erros: Number(event.target.value || 0) })} />
+      </div>
+      <textarea className="input mt-2 min-h-12" placeholder={placeholder} value={q.observacoes} onChange={(event) => syncQuestion(id, { observacoes: event.target.value })} />
+    </div>
+  );
+}
+
+function OverdueReviewsGroup({ reviews, storeDoneIds, syncTask, lessonQuestions, syncQuestion }: {
   reviews: Array<{ id: string; tipoRevisao: string; disciplina: string; aula: string; data: string; dataBR: string; semana: string }>;
   storeDoneIds: string[];
   syncTask: (id: string, checked: boolean, payload: { titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia?: string; descricao?: string; metadata?: unknown }) => Promise<void>;
+  lessonQuestions: Record<string, LessonQuestionValue>;
+  syncQuestion: (lessonId: string, value: Partial<LessonQuestionValue>) => Promise<void>;
 }) {
   return (
     <div className="grid gap-3">
       <h3 className="text-sm font-black uppercase tracking-wider text-slate-400">Revisoes atrasadas</h3>
-      {reviews.map((review) => (
-        <button
-          key={review.id}
-          className="grid gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10 md:grid-cols-[1fr_auto]"
-          onClick={() => syncTask(review.id, !storeDoneIds.includes(review.id), { titulo: review.aula, data: review.data, tipo: "REVISAO", materia: review.disciplina })}
-        >
-          <span>
-            <strong className="block">{review.tipoRevisao} - {review.disciplina}</strong>
-            <span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span>
-            <span className="mt-1 block text-xs text-slate-500">{review.dataBR} - {review.semana}</span>
-          </span>
-          <span className="flex flex-wrap items-center gap-2 md:justify-end">
-            <LateBadge date={review.data} />
-            <span className="badge bg-white text-brand-700 dark:bg-slate-900">{storeDoneIds.includes(review.id) ? "Realizada" : "Marcar revisao"}</span>
-          </span>
-        </button>
-      ))}
+      {reviews.map((review) => {
+        const done = storeDoneIds.includes(review.id);
+        const q = lessonQuestions[review.id] || { done: false, feitas: 0, acertos: 0, erros: 0, observacoes: "" };
+        return (
+          <div key={review.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-left dark:border-rose-500/20 dark:bg-rose-500/10">
+            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+              <span>
+                <strong className="block">{review.tipoRevisao} - {review.disciplina}</strong>
+                <span className="text-sm text-slate-600 dark:text-slate-300">{review.aula}</span>
+                <span className="mt-1 block text-xs text-slate-500">{review.dataBR} - {review.semana}</span>
+              </span>
+              <span className="flex flex-wrap items-center gap-2 md:justify-end">
+                <LateBadge date={review.data} />
+                <button className="btn-secondary h-10" onClick={() => syncTask(review.id, !done, { titulo: review.aula, data: review.data, tipo: "REVISAO", materia: review.disciplina })}>{done ? "Revisao realizada" : "Marcar revisao"}</button>
+              </span>
+            </div>
+            <ReviewQuestionFields id={review.id} q={q} syncQuestion={syncQuestion} label="Questoes desta revisao concluidas" placeholder="Questoes feitas na revisao atrasada, principais erros e pontos para reforcar..." />
+          </div>
+        );
+      })}
       {!reviews.length && <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-white/10">Nenhuma revisao atrasada encontrada.</div>}
     </div>
   );
