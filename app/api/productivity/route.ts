@@ -17,6 +17,17 @@ export async function POST(req: NextRequest) {
   try {
     const userId = await requireUserId();
     const body = productivitySchema.parse(await req.json());
+    const extraStudyId = body.observacoes?.match(/^extra-study:([^:]+):/)?.[1];
+    if (extraStudyId) {
+      const marker = `extra-study:${extraStudyId}:`;
+      const existing = await prisma.productivity.findFirst({
+        where: { userId, observacoes: { startsWith: marker } },
+        select: { id: true }
+      });
+      if (existing) {
+        return ok(await prisma.productivity.update({ where: { id: existing.id }, data: body }));
+      }
+    }
     return ok(await prisma.productivity.create({ data: { ...body, userId } }), { status: 201 });
   } catch (error) {
     return fail(error);
