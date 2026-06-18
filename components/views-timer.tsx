@@ -9,6 +9,7 @@ import { areas, todayISO } from "@/utils/schedule";
 
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
 type FlashcardRecord = { id: string; dueDate: string; updatedAt?: string; lastDifficulty?: string | null };
+type TaskRecord = { id: string; externalId: string | null; titulo: string; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 
 const compactDate = (value: string | Date) => new Date(value).toLocaleDateString("sv-SE");
 const systemOptions = [
@@ -58,6 +59,13 @@ function hoursToClock(value: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function extraTaskHours(task: TaskRecord) {
+  if (!task.metadata || typeof task.metadata !== "object") return 0;
+  const raw = (task.metadata as Record<string, unknown>).horas;
+  const value = typeof raw === "number" ? raw : Number(raw || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
 export function TimerView() {
   const active = useMedboardStore((state) => state.activeTimer);
   const setActive = useMedboardStore((state) => state.setActiveTimer);
@@ -65,16 +73,18 @@ export function TimerView() {
   const [now, setNow] = useState(Date.now());
   const [productivity, setProductivity] = useState<Productivity[]>([]);
   const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
+  const [extraTasks, setExtraTasks] = useState<TaskRecord[]>([]);
   const [hoursForm, setHoursForm] = useState({ data: todayISO(), materia: areas[0], sistema: systemOptions[0], horas: "", observacoes: "" });
   const [editingHours, setEditingHours] = useState<Record<string, string>>({});
   const [editingArea, setEditingArea] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    Promise.all([api<Productivity[]>("/api/productivity"), api<FlashcardRecord[]>("/api/flashcards")])
-      .then(([items, cardItems]) => {
+    Promise.all([api<Productivity[]>("/api/productivity"), api<FlashcardRecord[]>("/api/flashcards"), api<TaskRecord[]>("/api/tasks")])
+      .then(([items, cardItems, taskItems]) => {
         setProductivity(items);
         setFlashcards(cardItems);
+        setExtraTasks(taskItems.filter((task) => task.tipo === "EXTRA"));
         setEditingHours(Object.fromEntries(items.map((item) => [item.id, hoursToClock(item.horas)])));
         setEditingArea(Object.fromEntries(items.map((item) => [item.id, item.materia || areas[0]])));
       })
@@ -87,16 +97,34 @@ export function TimerView() {
   }, []);
 
   const activeElapsed = active ? active.accumulatedSeconds + (!active.paused ? Math.max(0, Math.round((now - active.startedAt) / 1000)) : 0) : 0;
-  const todayRecords = useMemo(() => productivity.filter((item) => compactDate(item.data) === todayISO()), [productivity]);
+  const effectiveProductivity = useMemo<Productivity[]>(() => {
+    const registeredExtraIds = new Set(productivity
+      .map((item) => item.observacoes?.match(/^extra-study:([^:]+):/)?.[1])
+      .filter(Boolean) as string[]);
+    const syntheticExtraHours = extraTasks
+      .filter((task) => {
+        const externalId = task.externalId || task.id;
+        return extraTaskHours(task) > 0 && !registeredExtraIds.has(externalId);
+      })
+      .map((task) => ({
+        id: `synthetic-${task.externalId || task.id}`,
+        data: task.data,
+        materia: task.materia,
+        horas: extraTaskHours(task),
+        observacoes: `extra-study:${task.externalId || task.id}:${task.titulo}`
+      }));
+    return [...productivity, ...syntheticExtraHours];
+  }, [extraTasks, productivity]);
+  const todayRecords = useMemo(() => effectiveProductivity.filter((item) => compactDate(item.data) === todayISO()), [effectiveProductivity]);
   const completedFlashToday = flashcards.filter((card) => card.updatedAt && compactDate(card.updatedAt) === todayISO() && card.lastDifficulty).length;
   const flashToday = flashcards.filter((card) => compactDate(card.dueDate) === todayISO() && !(card.updatedAt && compactDate(card.updatedAt) === todayISO() && card.lastDifficulty)).length;
   const flashOverdue = flashcards.filter((card) => compactDate(card.dueDate) < todayISO() && !(card.updatedAt && compactDate(card.updatedAt) === todayISO() && card.lastDifficulty)).length;
   const totalToday = todayRecords.reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const totalHours = productivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const activeDays = new Set(productivity.map((item) => compactDate(item.data))).size;
+  const totalHours = effectiveProductivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const activeDays = new Set(effectiveProductivity.map((item) => compactDate(item.data))).size;
   const byArea = areas.map((area) => ({
     area,
-    horas: productivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0),
+    horas: effectiveProductivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0),
     today: todayRecords.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0)
   }));
 

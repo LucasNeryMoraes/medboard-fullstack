@@ -6,6 +6,13 @@ import { rateLimit, sanitizeText } from "@/lib/security";
 import { requireUserId } from "@/lib/session";
 import { taskSchema } from "@/lib/validations";
 
+function metadataHours(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object") return 0;
+  const raw = (metadata as Record<string, unknown>).horas;
+  const value = typeof raw === "number" ? raw : Number(raw || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const userId = await requireUserId();
@@ -44,6 +51,27 @@ export async function POST(req: NextRequest) {
       create: data,
       update: data
     });
+    const horas = metadataHours(body.metadata);
+    if (body.tipo === "EXTRA" && horas > 0) {
+      const marker = `extra-study:${externalId}:`;
+      const existing = await prisma.productivity.findFirst({
+        where: { userId, observacoes: { startsWith: marker } },
+        select: { id: true }
+      });
+      const productivityData = {
+        userId,
+        materia: body.materia || null,
+        horas,
+        rendimento: 100,
+        data: body.data || new Date(),
+        observacoes: `${marker}${sanitizeText(body.titulo)}`
+      };
+      if (existing) {
+        await prisma.productivity.update({ where: { id: existing.id }, data: productivityData });
+      } else {
+        await prisma.productivity.create({ data: productivityData });
+      }
+    }
     return ok(task, { status: 201 });
   } catch (error) {
     return fail(error);

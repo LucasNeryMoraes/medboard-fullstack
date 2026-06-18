@@ -71,6 +71,13 @@ function performanceTotal(item: Pick<Performance, "questoes" | "acertos" | "erro
   return Number(item.questoes || 0) || Number(item.acertos || 0) + Number(item.erros || 0);
 }
 
+function extraTaskHours(task: TaskRecord) {
+  if (!task.metadata || typeof task.metadata !== "object") return 0;
+  const raw = (task.metadata as Record<string, unknown>).horas;
+  const value = typeof raw === "number" ? raw : Number(raw || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function classifyScore(score: number) {
   if (score < 45) return "Critico";
   if (score < 65) return "Atencao";
@@ -188,6 +195,24 @@ export function DashboardView() {
   }, [lessonQuestionRecords, storeQuestions]);
 
   const extraStudyTasks = useMemo(() => tasks.filter((task) => task.tipo === "EXTRA"), [tasks]);
+  const effectiveProductivity = useMemo<Productivity[]>(() => {
+    const registeredExtraIds = new Set(productivity
+      .map((item) => item.observacoes?.match(/^extra-study:([^:]+):/)?.[1])
+      .filter(Boolean) as string[]);
+    const syntheticExtraHours = extraStudyTasks
+      .filter((task) => {
+        const externalId = task.externalId || task.id;
+        return extraTaskHours(task) > 0 && !registeredExtraIds.has(externalId);
+      })
+      .map((task) => ({
+        id: `synthetic-${task.externalId || task.id}`,
+        data: task.data,
+        materia: task.materia,
+        horas: extraTaskHours(task),
+        observacoes: `extra-study:${task.externalId || task.id}:${task.titulo}`
+      }));
+    return [...productivity, ...syntheticExtraHours];
+  }, [extraStudyTasks, productivity]);
   const lessonDateById = useMemo(() => {
     const map = new Map<string, string>();
     lessons.forEach((lesson) => map.set(lesson.id, lesson.data));
@@ -203,12 +228,12 @@ export function DashboardView() {
     total: Math.max(Number(item.feitas || 0), Number(item.acertos || 0) + Number(item.erros || 0))
   })), [lessonDateById, questionByLesson]);
 
-  const hoursToday = productivity.filter((item) => compactDate(item.data) === today).reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const hoursWeek = productivity.filter((item) => new Date(item.data) >= weekStart).reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const hoursMonth = productivity.filter((item) => new Date(item.data) >= monthStart).reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const hoursTotal = productivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const hoursByArea = areas.map((area) => ({ area, hours: productivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0) })).sort((a, b) => b.hours - a.hours);
-  const hoursBySystem = Object.entries(productivity.reduce<Record<string, number>>((acc, item) => {
+  const hoursToday = effectiveProductivity.filter((item) => compactDate(item.data) === today).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursWeek = effectiveProductivity.filter((item) => new Date(item.data) >= weekStart).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursMonth = effectiveProductivity.filter((item) => new Date(item.data) >= monthStart).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursTotal = effectiveProductivity.reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const hoursByArea = areas.map((area) => ({ area, hours: effectiveProductivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0) })).sort((a, b) => b.hours - a.hours);
+  const hoursBySystem = Object.entries(effectiveProductivity.reduce<Record<string, number>>((acc, item) => {
     const system = inferSystem(`${item.observacoes || ""} ${item.materia || ""}`);
     acc[system] = (acc[system] || 0) + Number(item.horas || 0);
     return acc;
@@ -252,7 +277,7 @@ export function DashboardView() {
       acc.erros += Number(card.erros || 0);
       return acc;
     }, { acertos: 0, erros: 0 });
-    const areaHours = productivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+    const areaHours = effectiveProductivity.filter((item) => item.materia === area).reduce((acc, item) => acc + Number(item.horas || 0), 0);
     const last30 = performances.filter((item) => item.materia === area && new Date(item.data) >= last30Start);
     const previous30 = performances.filter((item) => item.materia === area && new Date(item.data) >= previous30Start && new Date(item.data) < last30Start);
     const last30Percent = last30.length ? last30.reduce((acc, item) => acc + item.percentual, 0) / last30.length : 0;
@@ -266,7 +291,7 @@ export function DashboardView() {
     const errosRecentes = errors.filter((item) => item.materia === area && new Date(item.createdAt || item.data) >= last30Start).length;
     const status = percentual < 55 || errosRecentes >= 5 || flashAtrasados >= 10 ? "Critico" : percentual < 70 || flashPendentes >= 12 ? "Atencao" : "Bom";
     return { area, acertos, erros, total, feitas: questionStats.feitas + extraQuestionStats.feitas, percentual, horas: areaHours, tendencia: Math.round(last30Percent - previous30Percent), status, flashPendentes, flashAtrasados, errosRecentes };
-  }), [errors, extraStudyTasks, flashDue, flashOverdue, flashcards, lessons, performances, productivity, questionByLesson]);
+  }), [effectiveProductivity, errors, extraStudyTasks, flashDue, flashOverdue, flashcards, lessons, performances, questionByLesson]);
 
   const questionTotals = performanceByArea.reduce((acc, item) => ({
     acertos: acc.acertos + item.acertos,
@@ -288,8 +313,8 @@ export function DashboardView() {
   const lastExam = performances.length ? [...performances].sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())[0] : null;
 
   const score = calculateResidencyScore({ generalAccuracy, examAverage, progressPercent, flashCompletionRate, flashRetentionRate, reviewOnTimeRate, hoursWeek, weeklyGoal: WEEKLY_HOURS_GOAL, criticalAreas });
-  const lastMonthHours = productivity.filter((item) => new Date(item.data) >= last30Start).reduce((acc, item) => acc + Number(item.horas || 0), 0);
-  const previousMonthHours = productivity.filter((item) => new Date(item.data) >= previous30Start && new Date(item.data) < last30Start).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const lastMonthHours = effectiveProductivity.filter((item) => new Date(item.data) >= last30Start).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+  const previousMonthHours = effectiveProductivity.filter((item) => new Date(item.data) >= previous30Start && new Date(item.data) < last30Start).reduce((acc, item) => acc + Number(item.horas || 0), 0);
   const scoreTrend = Math.round((lastMonthHours - previousMonthHours) / Math.max(1, previousMonthHours) * 100);
 
   const recurringErrors = Object.entries(errors.reduce<Record<string, number>>((acc, item) => {
@@ -313,9 +338,9 @@ export function DashboardView() {
 
   const questionsThisWeek = questionEvents.filter((item) => parseISODate(item.date) >= weekStart).reduce((acc, item) => acc + item.total, 0);
   const questionsThisMonth = questionEvents.filter((item) => monthKey(item.date) === currentMonth).reduce((acc, item) => acc + item.total, 0);
-  const activityByMonth = Array.from(new Set([...productivity.map((item) => monthKey(item.data)), ...performances.map((item) => monthKey(item.data)), ...questionEvents.map((item) => monthKey(item.date))])).sort().slice(-8).map((month) => ({
+  const activityByMonth = Array.from(new Set([...effectiveProductivity.map((item) => monthKey(item.data)), ...performances.map((item) => monthKey(item.data)), ...questionEvents.map((item) => monthKey(item.date))])).sort().slice(-8).map((month) => ({
     month,
-    horas: Math.round(productivity.filter((item) => monthKey(item.data) === month).reduce((acc, item) => acc + Number(item.horas || 0), 0) * 10) / 10,
+    horas: Math.round(effectiveProductivity.filter((item) => monthKey(item.data) === month).reduce((acc, item) => acc + Number(item.horas || 0), 0) * 10) / 10,
     simulados: new Set(performances.filter((item) => monthKey(item.data) === month).map((item) => item.examName || item.id)).size,
     questoes: questionEvents.filter((item) => monthKey(item.date) === month).reduce((acc, item) => acc + item.total, 0),
     flashcards: flashcards.filter((item) => item.updatedAt && monthKey(item.updatedAt) === month).length
@@ -325,7 +350,7 @@ export function DashboardView() {
     const date = new Date(todayDate);
     date.setDate(date.getDate() - (111 - index));
     const key = compactDate(date);
-    const hours = productivity.filter((item) => compactDate(item.data) === key).reduce((acc, item) => acc + Number(item.horas || 0), 0);
+    const hours = effectiveProductivity.filter((item) => compactDate(item.data) === key).reduce((acc, item) => acc + Number(item.horas || 0), 0);
     return { key, hours, level: hours >= 6 ? 4 : hours >= 4 ? 3 : hours >= 2 ? 2 : hours > 0 ? 1 : 0 };
   });
 

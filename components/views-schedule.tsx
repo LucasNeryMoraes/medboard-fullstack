@@ -350,12 +350,6 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
         body: JSON.stringify({ externalId: study.id, titulo: study.titulo, descricao: study.observacoes, data: study.data, tipo: "EXTRA", materia: study.materia, status: "DONE", metadata: { horas: study.horas } })
       });
       setTasks((current) => [saved, ...current.filter((task) => task.id !== saved.id)]);
-      if (study.horas > 0) {
-        await api("/api/productivity", {
-          method: "POST",
-          body: JSON.stringify({ materia: study.materia, data: study.data, horas: study.horas, rendimento: 100, observacoes: `extra-study:${study.id}:${study.titulo}` })
-        });
-      }
       if (feitas || acertos || erros || extraForm.observacoes.trim()) {
         await api(`/api/lesson-questions/${study.id}`, {
           method: "PATCH",
