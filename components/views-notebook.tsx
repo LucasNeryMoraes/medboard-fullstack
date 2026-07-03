@@ -978,6 +978,9 @@ function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, inde
   onFinishTimer: () => void;
 }) {
   const hasTime = elapsedSeconds > 0;
+  const currentClassification = current ? parseFlashTag(current.tag) : { tema: "", sistema: "" };
+  const currentArea = current?.materia || current?.deck || "Grande area nao informada";
+  const currentTheme = currentClassification.tema || "Tema nao informado";
   return (
     <article className="card p-5">
       <h2 className="text-xl font-black">Revisar flashcards</h2>
@@ -1007,6 +1010,10 @@ function FlashcardStudy({ area, setArea, mode, setMode, onShuffle, current, inde
             </div>
           </div>
           <div className="grid min-h-56 content-center rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-6 dark:border-fuchsia-400/30 dark:from-violet-500/10 dark:to-fuchsia-500/10">
+            <div className="mb-4 flex flex-wrap gap-2">
+              <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-xs font-black text-violet-900 dark:border-violet-400/30 dark:bg-slate-950 dark:text-violet-100">{currentArea}</span>
+              <span className="rounded-full border border-fuchsia-200 bg-white px-3 py-1 text-xs font-black text-fuchsia-700 dark:border-fuchsia-400/30 dark:bg-slate-950 dark:text-fuchsia-200">{currentTheme}</span>
+            </div>
             <span className="text-xs font-black uppercase tracking-wider text-fuchsia-600">{showAnswer ? "Verso do flashcard" : "Frente do flashcard"}</span>
             <p className="mt-4 whitespace-pre-wrap text-base font-black text-violet-950 dark:text-violet-50">{showAnswer ? current.resposta : current.pergunta}</p>
             {current.imagem && !showAnswer && <img className="mt-4 max-h-64 rounded-xl border border-slate-200 object-contain dark:border-white/10" src={current.imagem} alt="" />}
