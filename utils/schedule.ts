@@ -54,6 +54,21 @@ function weekdayLabel(iso: string) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+function isReviewExternalId(id: string) {
+  return id.startsWith("review-") || id.startsWith("rev-");
+}
+
+function reviewInterval(review: ScheduleRow["revisoesDoDia"][number]) {
+  const idMatch = review.id.match(/-(15|30)(?:-|$)/);
+  const labelMatch = review.tipoRevisao.match(/(15|30)/);
+  return Number(idMatch?.[1] || labelMatch?.[1] || 0);
+}
+
+function sameReviewContent(review: ScheduleRow["revisoesDoDia"][number], lesson: ScheduleLesson) {
+  return normalizeText(review.disciplina) === normalizeText(lesson.disciplina)
+    && normalizeText(review.aula) === normalizeText(lesson.aula);
+}
+
 function weekLabel(startISO: string, dateISO: string) {
   const diff = Math.max(0, Math.floor((parseISODate(dateISO).getTime() - parseISODate(startISO).getTime()) / 86_400_000));
   return `Semana ${Math.floor(diff / 7) + 1}`;
@@ -232,7 +247,7 @@ export function applyScheduleOverrides(
 
   const movedLessons = new Map<string, string>();
   Object.entries(overrides).forEach(([id, date]) => {
-    if (completed.has(id) || id.startsWith("review-")) return;
+    if (completed.has(id) || isReviewExternalId(id)) return;
     const lesson = lessons.get(id);
     if (!lesson) return;
     rows.forEach((row) => { row.aulas = row.aulas.filter((item) => item.id !== id); });
@@ -250,12 +265,13 @@ export function applyScheduleOverrides(
   });
 
   movedLessons.forEach((lessonDate, lessonId) => {
+    const lesson = lessons.get(lessonId);
+    if (!lesson) return;
     [15, 30].forEach((days) => {
-      const reviewId = `review-${lessonId}-${days}`;
-      if (completed.has(reviewId)) return;
-      const review = reviews.get(reviewId);
+      const review = [...reviews.values()].find((item) => reviewInterval(item) === days && sameReviewContent(item, lesson));
       if (!review) return;
-      rows.forEach((row) => { row.revisoesDoDia = row.revisoesDoDia.filter((item) => item.id !== reviewId); });
+      if (completed.has(review.id)) return;
+      rows.forEach((row) => { row.revisoesDoDia = row.revisoesDoDia.filter((item) => item.id !== review.id); });
       const date = addDays(lessonDate, days);
       const target = ensureRow(date, "revisao");
       target.revisoesDoDia.push({
@@ -268,7 +284,7 @@ export function applyScheduleOverrides(
   });
 
   Object.entries(overrides).forEach(([id, date]) => {
-    if (completed.has(id) || !id.startsWith("review-")) return;
+    if (completed.has(id) || !isReviewExternalId(id)) return;
     const review = reviews.get(id);
     if (!review) return;
     rows.forEach((row) => { row.revisoesDoDia = row.revisoesDoDia.filter((item) => item.id !== id); });

@@ -4,10 +4,10 @@ import { ok, fail } from "@/lib/api-response";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/security";
 import { requireUserId } from "@/lib/session";
-import { applyScheduleOverrides, buildCronogramSchedule, dateOnlyISO, inferPriority, parseISODate, schedule } from "@/utils/schedule";
+import { applyScheduleOverrides, buildCronogramSchedule, dateOnlyISO, inferPriority, normalizeText, parseISODate, schedule } from "@/utils/schedule";
 
 type PendingItem = { id: string; title: string; materia: string; originalDate: string; targetDate?: string };
-type ReviewCandidate = PendingItem & { lessonId: string | null; interval: number | null };
+type ReviewCandidate = PendingItem & { lessonId: string | null; interval: number | null; lessonTitle: string };
 type ReorganizationPlan = {
   lessons: PendingItem[];
   reviews: PendingItem[];
@@ -30,8 +30,11 @@ function taskMetadata(task: { metadata: unknown }) {
 }
 
 function reviewIdentity(id: string) {
-  const match = id.match(/^review-(.+)-(15|30)$/);
-  return match ? { lessonId: match[1], interval: Number(match[2]) } : { lessonId: null, interval: null };
+  const generated = id.match(/^review-(.+)-(15|30)$/);
+  if (generated) return { lessonId: generated[1], interval: Number(generated[2]) };
+  const original = id.match(/^rev-(\d{8})-(15|30)-(.+)$/);
+  if (original) return { lessonId: `legacy:${original[1]}:${original[3]}`, interval: Number(original[2]) };
+  return { lessonId: null, interval: null };
 }
 
 async function createPlan(userId: string): Promise<ReorganizationPlan> {
@@ -68,10 +71,10 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
       materia: review.disciplina,
       originalDate: row.data,
       lessonId: identity.lessonId,
-      interval: identity.interval
+      interval: identity.interval,
+      lessonTitle: review.aula
     };
   }));
-  const reviewById = new Map(allReviews.map((review) => [review.id, review]));
   const overdueReviews = allReviews
     .filter((review) => {
       const task = taskByExternalId.get(review.id);
@@ -142,12 +145,15 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
     targetDate: allocate("flashcard")
   }));
   const movedLessonIds = new Set(lessons.map((lesson) => lesson.id));
+  const movedLessonContent = new Set(lessons.map((lesson) => `${normalizeText(lesson.materia)}|${normalizeText(lesson.title)}`));
   const reviewPlans = new Map<string, PendingItem>();
 
   // Aulas pendentes remarcadas mantêm D+15 e D+30 a partir da nova data.
   lessons.forEach((lesson) => {
     [15, 30].forEach((interval) => {
-      const review = reviewById.get(`review-${lesson.id}-${interval}`);
+      const review = allReviews.find((item) => item.interval === interval
+        && normalizeText(item.materia) === normalizeText(lesson.materia)
+        && normalizeText(item.lessonTitle) === normalizeText(lesson.title));
       if (!review || completedIds.includes(review.id) || archived.has(review.id)) return;
       const idealDate = addDays(lesson.targetDate!, interval);
       const targetDate = reserveReview(idealDate, true) ? idealDate : allocate("review", idealDate);
@@ -156,7 +162,10 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
   });
 
   const overdueGroups = new Map<string, ReviewCandidate[]>();
-  overdueReviews.filter((review) => !review.lessonId || !movedLessonIds.has(review.lessonId)).forEach((review) => {
+  overdueReviews.filter((review) => {
+    const contentKey = `${normalizeText(review.materia)}|${normalizeText(review.lessonTitle)}`;
+    return (!review.lessonId || !movedLessonIds.has(review.lessonId)) && !movedLessonContent.has(contentKey);
+  }).forEach((review) => {
     const key = review.lessonId || review.id;
     overdueGroups.set(key, [...(overdueGroups.get(key) || []), review]);
   });
@@ -172,7 +181,7 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
     if (d15) {
       const d15Target = allocate("review");
       reviewPlans.set(d15.id, { ...d15, targetDate: d15Target });
-      const linkedD30 = lessonId === d15.id ? undefined : reviewById.get(`review-${lessonId}-30`);
+      const linkedD30 = lessonId === d15.id ? undefined : allReviews.find((review) => review.lessonId === lessonId && review.interval === 30);
       if (linkedD30 && !completedIds.includes(linkedD30.id) && !archived.has(linkedD30.id)) {
         const earliestD30 = addDays(d15Target, 15);
         reviewPlans.set(linkedD30.id, { ...linkedD30, targetDate: allocate("review", earliestD30) });
@@ -193,7 +202,9 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
 export async function GET() {
   try {
     const userId = await requireUserId();
-    return ok(await createPlan(userId));
+    const plan = await createPlan(userId);
+    console.info("[schedule-reorganize] preview", { userId, lessons: plan.lessons.length, reviews: plan.reviews.length, flashcards: plan.flashcards.length });
+    return ok(plan);
   } catch (error) {
     return fail(error, 401);
   }
@@ -205,6 +216,7 @@ export async function POST(req: NextRequest) {
   try {
     const userId = await requireUserId();
     const plan = await createPlan(userId);
+    console.info("[schedule-reorganize] execute", { userId, lessons: plan.lessons.length, reviews: plan.reviews.length, flashcards: plan.flashcards.length });
     const ids = [...plan.lessons, ...plan.reviews].map((item) => item.id);
     const existingTasks = await prisma.task.findMany({ where: { userId, externalId: { in: ids } } });
     const existingByExternalId = new Map(existingTasks.map((task) => [task.externalId, task]));
