@@ -7,6 +7,7 @@ import { requireUserId } from "@/lib/session";
 import { applyScheduleOverrides, buildCronogramSchedule, dateOnlyISO, inferPriority, parseISODate, schedule } from "@/utils/schedule";
 
 type PendingItem = { id: string; title: string; materia: string; originalDate: string; targetDate?: string };
+type ReviewCandidate = PendingItem & { lessonId: string | null; interval: number | null };
 type ReorganizationPlan = {
   lessons: PendingItem[];
   reviews: PendingItem[];
@@ -28,6 +29,11 @@ function taskMetadata(task: { metadata: unknown }) {
   return task.metadata && typeof task.metadata === "object" ? task.metadata as Record<string, unknown> : {};
 }
 
+function reviewIdentity(id: string) {
+  const match = id.match(/^review-(.+)-(15|30)$/);
+  return match ? { lessonId: match[1], interval: Number(match[2]) } : { lessonId: null, interval: null };
+}
+
 async function createPlan(userId: string): Promise<ReorganizationPlan> {
   const today = saoPauloToday();
   const [settings, tasks, flashcards, latestSnapshot] = await Promise.all([
@@ -42,6 +48,7 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
     .filter((task) => task.status === "RESCHEDULED" && task.externalId)
     .map((task) => [task.externalId as string, dateOnlyISO(task.data)]));
   const archived = new Set(tasks.filter((task) => task.status === "ARCHIVED" && task.externalId).map((task) => task.externalId as string));
+  const taskByExternalId = new Map(tasks.filter((task) => task.externalId).map((task) => [task.externalId as string, task]));
   const base = buildCronogramSchedule({
     startDate: settings ? dateOnlyISO(settings.cronogramStartDate) : schedule.stats.inicio,
     completedIds,
@@ -53,8 +60,23 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
   const overdueLessons = current.rows.flatMap((row) => row.aulas.map((lesson) => ({ ...lesson, rowDate: row.data })))
     .filter((lesson) => lesson.rowDate < today && !completedIds.includes(lesson.id) && !archived.has(lesson.id))
     .sort((a, b) => inferPriority(b).score - inferPriority(a).score || a.rowDate.localeCompare(b.rowDate));
-  const overdueReviews = current.rows.flatMap((row) => row.revisoesDoDia.map((review) => ({ ...review, rowDate: row.data })))
-    .filter((review) => review.rowDate < today && !completedIds.includes(review.id) && !archived.has(review.id));
+  const allReviews: ReviewCandidate[] = current.rows.flatMap((row) => row.revisoesDoDia.map((review) => {
+    const identity = reviewIdentity(review.id);
+    return {
+      id: review.id,
+      title: `${review.tipoRevisao} - ${review.aula}`,
+      materia: review.disciplina,
+      originalDate: row.data,
+      lessonId: identity.lessonId,
+      interval: identity.interval
+    };
+  }));
+  const reviewById = new Map(allReviews.map((review) => [review.id, review]));
+  const overdueReviews = allReviews
+    .filter((review) => {
+      const task = taskByExternalId.get(review.id);
+      return (review.originalDate < today || task?.status === "OVERDUE") && !completedIds.includes(review.id) && !archived.has(review.id);
+    });
   const overdueFlashcards = flashcards.filter((card) => dateOnlyISO(card.dueDate) < today);
 
   const load = new Map<string, { lessons: number; reviews: number; flashcards: number; addedLessons: number; addedReviews: number; addedFlashcards: number }>();
@@ -69,19 +91,34 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
   });
   flashcards.filter((card) => dateOnlyISO(card.dueDate) >= today).forEach((card) => { getLoad(dateOnlyISO(card.dueDate)).flashcards += 1; });
 
-  function allocate(type: "lesson" | "review" | "flashcard") {
-    let cursor = today;
+  function dailyWeight(date: string) {
+    const day = getLoad(date);
+    return day.lessons * 2 + day.reviews + Math.ceil(day.flashcards / 20);
+  }
+
+  function reserveReview(date: string, allowSunday = false) {
+    const weekday = parseISODate(date).getDay();
+    const day = getLoad(date);
+    const cap = weekday === 0 ? 2 : 5;
+    const allowedDay = weekday >= 1 && weekday <= 5 || (allowSunday && weekday === 0);
+    if (!allowedDay || day.reviews >= cap || day.addedReviews >= (weekday === 0 ? 2 : 3) || dailyWeight(date) >= 8) return false;
+    day.reviews += 1;
+    day.addedReviews += 1;
+    return true;
+  }
+
+  function allocate(type: "lesson" | "review" | "flashcard", earliest = today) {
+    let cursor = earliest < today ? today : earliest;
     for (let attempt = 0; attempt < 730; attempt += 1) {
       const weekday = parseISODate(cursor).getDay();
       const day = getLoad(cursor);
       const allowed = type === "lesson"
-        ? weekday >= 1 && weekday <= 5 && day.lessons < 3 && day.addedLessons < 2
+        ? weekday >= 1 && weekday <= 5 && day.lessons < 3 && day.addedLessons < 2 && dailyWeight(cursor) < 8
         : type === "review"
-          ? weekday !== 6 && day.reviews < (weekday === 0 ? 2 : 5) && day.addedReviews < (weekday === 0 ? 2 : 3)
-          : day.flashcards < (weekday === 0 ? 20 : 60) && day.addedFlashcards < (weekday === 0 ? 20 : 30);
+          ? reserveReview(cursor)
+          : day.flashcards < (weekday === 0 ? 20 : 60) && day.addedFlashcards < (weekday === 0 ? 20 : 30) && dailyWeight(cursor) < 9;
       if (allowed) {
         if (type === "lesson") { day.lessons += 1; day.addedLessons += 1; }
-        if (type === "review") { day.reviews += 1; day.addedReviews += 1; }
         if (type === "flashcard") { day.flashcards += 1; day.addedFlashcards += 1; }
         return cursor;
       }
@@ -97,16 +134,6 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
     originalDate: lesson.rowDate,
     targetDate: allocate("lesson")
   }));
-  const movedLessonIds = new Set(lessons.map((lesson) => lesson.id));
-  const reviews = overdueReviews
-    .filter((review) => ![...movedLessonIds].some((lessonId) => review.id === `review-${lessonId}-15` || review.id === `review-${lessonId}-30`))
-    .map((review) => ({
-      id: review.id,
-      title: `${review.tipoRevisao} - ${review.aula}`,
-      materia: review.disciplina,
-      originalDate: review.rowDate,
-      targetDate: allocate("review")
-    }));
   const flashcardPlans = overdueFlashcards.map((card) => ({
     id: card.id,
     title: card.pergunta,
@@ -114,6 +141,51 @@ async function createPlan(userId: string): Promise<ReorganizationPlan> {
     originalDate: dateOnlyISO(card.dueDate),
     targetDate: allocate("flashcard")
   }));
+  const movedLessonIds = new Set(lessons.map((lesson) => lesson.id));
+  const reviewPlans = new Map<string, PendingItem>();
+
+  // Aulas pendentes remarcadas mantêm D+15 e D+30 a partir da nova data.
+  lessons.forEach((lesson) => {
+    [15, 30].forEach((interval) => {
+      const review = reviewById.get(`review-${lesson.id}-${interval}`);
+      if (!review || completedIds.includes(review.id) || archived.has(review.id)) return;
+      const idealDate = addDays(lesson.targetDate!, interval);
+      const targetDate = reserveReview(idealDate, true) ? idealDate : allocate("review", idealDate);
+      reviewPlans.set(review.id, { ...review, targetDate });
+    });
+  });
+
+  const overdueGroups = new Map<string, ReviewCandidate[]>();
+  overdueReviews.filter((review) => !review.lessonId || !movedLessonIds.has(review.lessonId)).forEach((review) => {
+    const key = review.lessonId || review.id;
+    overdueGroups.set(key, [...(overdueGroups.get(key) || []), review]);
+  });
+  const orderedGroups = [...overdueGroups.entries()].sort(([, left], [, right]) => {
+    const leftPriority = inferPriority({ disciplina: left[0]?.materia || "", aula: left[0]?.title || "" } as never).score;
+    const rightPriority = inferPriority({ disciplina: right[0]?.materia || "", aula: right[0]?.title || "" } as never).score;
+    return rightPriority - leftPriority || (left[0]?.originalDate || "").localeCompare(right[0]?.originalDate || "");
+  });
+
+  orderedGroups.forEach(([lessonId, overdue]) => {
+    const d15 = overdue.find((review) => review.interval === 15);
+    const d30Overdue = overdue.find((review) => review.interval === 30);
+    if (d15) {
+      const d15Target = allocate("review");
+      reviewPlans.set(d15.id, { ...d15, targetDate: d15Target });
+      const linkedD30 = lessonId === d15.id ? undefined : reviewById.get(`review-${lessonId}-30`);
+      if (linkedD30 && !completedIds.includes(linkedD30.id) && !archived.has(linkedD30.id)) {
+        const earliestD30 = addDays(d15Target, 15);
+        reviewPlans.set(linkedD30.id, { ...linkedD30, targetDate: allocate("review", earliestD30) });
+      }
+    }
+    if (d30Overdue && !reviewPlans.has(d30Overdue.id)) {
+      reviewPlans.set(d30Overdue.id, { ...d30Overdue, targetDate: allocate("review") });
+    }
+    overdue.filter((review) => review.interval === null).forEach((review) => {
+      if (!reviewPlans.has(review.id)) reviewPlans.set(review.id, { ...review, targetDate: allocate("review") });
+    });
+  });
+  const reviews = [...reviewPlans.values()];
 
   return { lessons, reviews, flashcards: flashcardPlans, latestSnapshotId: latestSnapshot?.id || null };
 }
