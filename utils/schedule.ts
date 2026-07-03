@@ -203,6 +203,103 @@ export function buildCronogramSchedule(options: { startDate?: string | null; com
   } satisfies ScheduleData;
 }
 
+export function applyScheduleOverrides(
+  source: ScheduleData,
+  options: { rescheduledDates?: Record<string, string>; completedIds?: string[] } = {}
+) {
+  const overrides = options.rescheduledDates || {};
+  if (!Object.keys(overrides).length) return source;
+
+  const completed = new Set(options.completedIds || []);
+  const rows = source.rows.map((row) => ({
+    ...row,
+    aulas: row.aulas.map((lesson) => ({ ...lesson })),
+    revisoesDoDia: row.revisoesDoDia.map((review) => ({ ...review }))
+  }));
+  const lessons = new Map(rows.flatMap((row) => row.aulas).map((lesson) => [lesson.id, { ...lesson }]));
+  const reviews = new Map(rows.flatMap((row) => row.revisoesDoDia).map((review) => [review.id, { ...review }]));
+
+  function ensureRow(date: string, type: "aula" | "revisao") {
+    let row = rows.find((item) => item.data === date && item.tipo === type);
+    if (!row) {
+      row = rowBase(rows.length + 1, source.stats.inicio, date, type, type === "revisao"
+        ? { disciplina: "Revisao", assunto: "Revisoes reorganizadas" }
+        : { disciplina: "Aula", assunto: "Aulas reorganizadas" });
+      rows.push(row);
+    }
+    return row;
+  }
+
+  const movedLessons = new Map<string, string>();
+  Object.entries(overrides).forEach(([id, date]) => {
+    if (completed.has(id) || id.startsWith("review-")) return;
+    const lesson = lessons.get(id);
+    if (!lesson) return;
+    rows.forEach((row) => { row.aulas = row.aulas.filter((item) => item.id !== id); });
+    const target = ensureRow(date, "aula");
+    target.aulas.push({
+      ...lesson,
+      data: date,
+      dataBR: formatBR(date),
+      diaSemana: weekdayLabel(date),
+      semana: weekLabel(source.stats.inicio, date)
+    });
+    target.disciplina = target.aulas[0]?.disciplina || "Aula";
+    target.assunto = target.aulas.map((item) => item.aula).join(" | ");
+    movedLessons.set(id, date);
+  });
+
+  movedLessons.forEach((lessonDate, lessonId) => {
+    [15, 30].forEach((days) => {
+      const reviewId = `review-${lessonId}-${days}`;
+      if (completed.has(reviewId)) return;
+      const review = reviews.get(reviewId);
+      if (!review) return;
+      rows.forEach((row) => { row.revisoesDoDia = row.revisoesDoDia.filter((item) => item.id !== reviewId); });
+      const date = addDays(lessonDate, days);
+      const target = ensureRow(date, "revisao");
+      target.revisoesDoDia.push({
+        ...review,
+        dataOriginal: lessonDate,
+        semanaOriginal: weekLabel(source.stats.inicio, lessonDate)
+      });
+      target.assunto = `${target.revisoesDoDia.length} revisao(oes)`;
+    });
+  });
+
+  Object.entries(overrides).forEach(([id, date]) => {
+    if (completed.has(id) || !id.startsWith("review-")) return;
+    const review = reviews.get(id);
+    if (!review) return;
+    rows.forEach((row) => { row.revisoesDoDia = row.revisoesDoDia.filter((item) => item.id !== id); });
+    const target = ensureRow(date, "revisao");
+    target.revisoesDoDia.push(review);
+    target.assunto = `${target.revisoesDoDia.length} revisao(oes)`;
+  });
+
+  const filtered = rows.filter((row) => row.tipo === "simulado" || row.tipo === "livre" || row.aulas.length || row.revisoesDoDia.length);
+  filtered.sort((a, b) => a.data.localeCompare(b.data) || a.row - b.row);
+  filtered.forEach((row, index) => {
+    row.row = index + 1;
+    row.semana = weekLabel(source.stats.inicio, row.data);
+    row.dataBR = formatBR(row.data);
+    row.diaSemana = weekdayLabel(row.data);
+  });
+
+  return {
+    ...source,
+    rows: filtered,
+    semanas: [...new Set(filtered.map((row) => row.semana))],
+    stats: {
+      ...source.stats,
+      fim: filtered.at(-1)?.data || source.stats.fim,
+      totalDias: new Set(filtered.map((row) => row.data)).size,
+      totalAulas: filtered.reduce((total, row) => total + row.aulas.length, 0),
+      totalRevisoes: filtered.reduce((total, row) => total + row.revisoesDoDia.length, 0)
+    }
+  } satisfies ScheduleData;
+}
+
 export function allLessons(rows: ScheduleRow[] = schedule.rows) {
   return rows.flatMap((row) => row.aulas || []);
 }

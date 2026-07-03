@@ -5,14 +5,14 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import { BookOpenCheck, Brain, ShieldAlert, Target, TimerReset } from "lucide-react";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { allLessons, allProgressIds, areas, buildCronogramSchedule, dateOnlyISO, parseISODate, schedule, todayISO } from "@/utils/schedule";
+import { allLessons, allProgressIds, applyScheduleOverrides, areas, buildCronogramSchedule, dateOnlyISO, parseISODate, schedule, todayISO } from "@/utils/schedule";
 
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type ErrorNote = { id: string; tema: string; materia: string | null; erro: string; revisao: string | null; flashcard: string | null; dificuldade: string | null; data: string; createdAt: string };
 type Flashcard = { id: string; pergunta: string; tag: string | null; materia: string | null; deck: string | null; dueDate: string; updatedAt?: string; acertos: number; erros: number; lastDifficulty?: string | null };
 type Productivity = { id: string; data: string; materia: string | null; horas: number; observacoes: string | null };
 type Performance = { id: string; materia: string; questoes?: number; acertos: number; erros: number; percentual: number; examName: string | null; instituicao?: string | null; observacoes?: string | null; data: string; createdAt: string };
-type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
+type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "OVERDUE" | "DONE" | "RESCHEDULED" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 type ScheduleSettingsRecord = { cronogramStartDate: string; resetMode: "SMART" | "FULL" };
 type AreaPerformance = { area: string; acertos: number; erros: number; total: number; feitas: number; percentual: number; horas: number; tendencia: number; status: "Critico" | "Atencao" | "Bom"; flashPendentes: number; flashAtrasados: number; errosRecentes: number };
 type ScoreInput = {
@@ -157,12 +157,13 @@ export function DashboardView() {
 
   const completedIds = useMemo(() => tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string), [tasks]);
   const completedDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => [task.externalId as string, compactDate(task.data)])), [tasks]);
-  const currentSchedule = useMemo(() => buildCronogramSchedule({
+  const rescheduledDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "RESCHEDULED" && task.externalId).map((task) => [task.externalId as string, compactDate(task.data)])), [tasks]);
+  const currentSchedule = useMemo(() => applyScheduleOverrides(buildCronogramSchedule({
     startDate: settings?.cronogramStartDate ? dateOnlyISO(settings.cronogramStartDate) : schedule.stats.inicio,
     completedIds,
     completedDates,
     resetMode: settings?.resetMode || "SMART"
-  }), [completedDates, completedIds, settings]);
+  }), { rescheduledDates, completedIds }), [completedDates, completedIds, rescheduledDates, settings]);
   const ids = useMemo(() => allProgressIds(currentSchedule.rows), [currentSchedule.rows]);
   const lessons = useMemo(() => allLessons(currentSchedule.rows), [currentSchedule.rows]);
 

@@ -27,7 +27,7 @@ export const taskSchema = z.object({
   externalId: z.string().optional(),
   titulo: z.string().min(1),
   descricao: z.string().optional().nullable(),
-  status: z.enum(["PENDING", "DONE", "ARCHIVED"]).default("PENDING"),
+  status: z.enum(["PENDING", "OVERDUE", "DONE", "RESCHEDULED", "ARCHIVED"]).default("PENDING"),
   data: z.coerce.date(),
   tipo: z.enum(["AULA", "REVISAO", "SIMULADO", "LIVRE", "EXTRA"]),
   prioridade: z.enum(["LOW", "MEDIUM", "HIGH"]).default("MEDIUM"),

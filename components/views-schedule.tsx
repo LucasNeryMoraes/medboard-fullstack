@@ -6,14 +6,16 @@ import { toast } from "sonner";
 import { useMedboardStore } from "@/hooks/use-medboard-store";
 import type { ExtraStudy } from "@/hooks/use-medboard-store";
 import { api } from "@/services/api";
-import { allLessons, allProgressIds, areas, buildCronogramSchedule, dateOnlyISO, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO } from "@/utils/schedule";
+import { allLessons, allProgressIds, applyScheduleOverrides, areas, buildCronogramSchedule, dateOnlyISO, inferPriority, isSaturday, normalizeText, parseISODate, saturdaySimuladoId, schedule, todayISO } from "@/utils/schedule";
 
-type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "DONE" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
+type TaskRecord = { id: string; externalId: string | null; titulo: string; descricao: string | null; status: "PENDING" | "OVERDUE" | "DONE" | "RESCHEDULED" | "ARCHIVED"; data: string; tipo: "AULA" | "REVISAO" | "SIMULADO" | "LIVRE" | "EXTRA"; materia: string | null; metadata?: unknown };
 type LessonQuestionRecord = { lessonId: string; done: boolean; feitas: number; acertos: number; erros: number; observacoes: string | null };
 type LessonQuestionValue = { done: boolean; feitas: number; acertos: number; erros: number; observacoes: string };
 type ProductivityRecord = { id: string; materia: string | null; horas: number; data: string; observacoes: string | null };
 type FlashcardRecord = { id: string; dueDate: string; updatedAt?: string; lastDifficulty?: string | null };
 type ScheduleSettingsRecord = { cronogramStartDate: string; resetMode: "SMART" | "FULL" };
+type ReorganizationPreview = { lessons: unknown[]; reviews: unknown[]; flashcards: unknown[]; latestSnapshotId: string | null };
+type ReorganizationResult = { snapshotId: string; lessons: number; reviews: number; flashcards: number };
 
 const dayLabels = [
   ["segunda", "Segunda"],
@@ -78,9 +80,15 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [flashcards, setFlashcards] = useState<FlashcardRecord[]>([]);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [reorganizing, setReorganizing] = useState(false);
+  const [latestSnapshotId, setLatestSnapshotId] = useState<string | null>(null);
   const completedDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => [task.externalId as string, toDateInput(task.data)])), [tasks]);
+  const rescheduledDates = useMemo(() => Object.fromEntries(tasks.filter((task) => task.status === "RESCHEDULED" && task.externalId).map((task) => [task.externalId as string, toDateInput(task.data)])), [tasks]);
   const activeStartDate = settingsLoaded ? store.cronogramStartDate : schedule.stats.inicio;
-  const currentSchedule = useMemo(() => buildCronogramSchedule({ startDate: activeStartDate, completedIds: store.doneIds, completedDates, resetMode: store.cronogramResetMode }), [activeStartDate, completedDates, store.cronogramResetMode, store.doneIds]);
+  const currentSchedule = useMemo(() => applyScheduleOverrides(
+    buildCronogramSchedule({ startDate: activeStartDate, completedIds: store.doneIds, completedDates, resetMode: store.cronogramResetMode }),
+    { rescheduledDates, completedIds: store.doneIds }
+  ), [activeStartDate, completedDates, rescheduledDates, store.cronogramResetMode, store.doneIds]);
   const selectedWeek = store.week || currentSchedule.rows.find((row) => row.data === todayISO())?.semana || currentSchedule.semanas[0];
   const totalProgressIds = useMemo(() => allProgressIds(currentSchedule.rows), [currentSchedule.rows]);
   const extraProgressIds = useMemo(() => new Set(store.extraStudies.map((study) => study.id)), [store.extraStudies]);
@@ -368,41 +376,55 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
     }
   }
 
-  async function resetCronogram(resetMode: "SMART" | "FULL") {
-    const message = resetMode === "FULL"
-      ? "Tem certeza que deseja fazer o reset completo? As marcacoes de conclusao do cronograma e questoes de aula serao removidas, mas seu historico de estudos, horas, flashcards, caderno e desempenho sera preservado."
-      : "Tem certeza que deseja resetar o cronograma? Todas as datas futuras serao recalculadas a partir de hoje. Seu historico de estudos sera preservado.";
-    if (!window.confirm(message)) return;
+  async function refreshAfterReorganization() {
+    const [refreshedTasks, refreshedFlashcards] = await Promise.all([
+      api<TaskRecord[]>("/api/tasks"),
+      api<FlashcardRecord[]>("/api/flashcards")
+    ]);
+    setTasks(refreshedTasks);
+    setFlashcards(refreshedFlashcards);
+    store.setDoneIds(refreshedTasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
+  }
 
-    const cronogramStartDate = todayISO();
-    const previousStartDate = store.cronogramStartDate;
-    const previousResetMode = store.cronogramResetMode;
-    const previousDoneIds = store.doneIds;
-    const previousQuestions = store.lessonQuestions;
-    store.setCronogramSettings({ cronogramStartDate, resetMode });
-    if (resetMode === "FULL") {
-      store.setDoneIds(previousDoneIds.filter((id) => !id.startsWith("aula-") && !id.startsWith("review-") && !id.startsWith("simulado-sabado-")));
-      store.setLessonQuestions(Object.fromEntries(Object.entries(previousQuestions).filter(([id]) => !id.startsWith("aula-"))));
-      setTasks((current) => current.filter((task) => task.tipo === "EXTRA"));
-    }
-
+  async function reorganizeSchedule() {
+    if (reorganizing) return;
+    setReorganizing(true);
     try {
-      const settings = await api<ScheduleSettingsRecord>("/api/schedule-settings", {
-        method: "POST",
-        body: JSON.stringify({ cronogramStartDate, resetMode })
-      });
-      store.setCronogramSettings({ cronogramStartDate: toDateInput(settings.cronogramStartDate), resetMode: settings.resetMode });
-      if (resetMode === "FULL") {
-        const refreshedTasks = await api<TaskRecord[]>("/api/tasks");
-        setTasks(refreshedTasks);
-        store.setDoneIds(refreshedTasks.filter((task) => task.status === "DONE" && task.externalId).map((task) => task.externalId as string));
+      const preview = await api<ReorganizationPreview>("/api/schedule-reorganize");
+      setLatestSnapshotId(preview.latestSnapshotId);
+      const total = preview.lessons.length + preview.reviews.length + preview.flashcards.length;
+      if (!total) {
+        toast.success("Nenhuma pendencia atrasada para reorganizar.");
+        return;
       }
-      toast.success(resetMode === "FULL" ? "Cronograma reiniciado por completo." : "Cronograma redistribuido a partir de hoje.");
+      const confirmed = window.confirm(
+        `Voce possui:\n\n${preview.lessons.length} aulas atrasadas\n${preview.reviews.length} revisoes atrasadas\n${preview.flashcards.length} flashcards atrasados\n\nDeseja redistribuir essas tarefas?\n\nNenhuma tarefa concluida sera alterada.`
+      );
+      if (!confirmed) return;
+      const result = await api<ReorganizationResult>("/api/schedule-reorganize", { method: "POST" });
+      setLatestSnapshotId(result.snapshotId);
+      await refreshAfterReorganization();
+      toast.success(`Reorganizacao concluida: ${result.lessons} aulas, ${result.reviews} revisoes e ${result.flashcards} flashcards redistribuidos. Nenhum concluido foi alterado.`);
     } catch {
-      store.setCronogramSettings({ cronogramStartDate: previousStartDate, resetMode: previousResetMode });
-      store.setDoneIds(previousDoneIds);
-      store.setLessonQuestions(previousQuestions);
-      toast.error("Nao consegui resetar o cronograma agora.");
+      toast.error("Nao consegui reorganizar as pendencias. Nenhum dado foi alterado.");
+    } finally {
+      setReorganizing(false);
+    }
+  }
+
+  async function rollbackReorganization() {
+    if (reorganizing) return;
+    if (!window.confirm("Deseja restaurar o estado anterior a ultima reorganizacao? Itens concluidos depois dela continuarao preservados.")) return;
+    setReorganizing(true);
+    try {
+      await api("/api/schedule-reorganize/rollback", { method: "POST", body: JSON.stringify({ snapshotId: latestSnapshotId || undefined }) });
+      setLatestSnapshotId(null);
+      await refreshAfterReorganization();
+      toast.success("Ultima reorganizacao desfeita. O historico concluido foi preservado.");
+    } catch {
+      toast.error("Nao encontrei uma reorganizacao que possa ser desfeita.");
+    } finally {
+      setReorganizing(false);
     }
   }
 
@@ -425,11 +447,12 @@ export function ScheduleView({ mode = "full" }: ScheduleViewProps = {}) {
           <small className="font-bold text-slate-500 dark:text-slate-400">{progressDoneCount} de {progressTotal} concluidos</small>
         </article>
         <article className="card p-4">
-          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Data base</span>
-          <strong className="mt-1 block text-2xl font-black tracking-tight">{toDateInput(store.cronogramStartDate || currentSchedule.stats.inicio).split("-").reverse().join("/")}</strong>
+          <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Recuperacao de atrasos</span>
+          <strong className="mt-1 block text-lg font-black tracking-tight">Redistribuicao segura</strong>
+          <small className="mt-1 block font-bold text-slate-500 dark:text-slate-400">Somente pendencias; concluidos permanecem intactos.</small>
           <div className="mt-3 grid gap-2">
-            <button className="btn-primary bg-red-700 hover:bg-red-800" onClick={() => resetCronogram("SMART")}>Resetar Cronograma</button>
-            <button className="btn-secondary" onClick={() => resetCronogram("FULL")}>Reset completo</button>
+            <button className="btn-primary bg-red-700 hover:bg-red-800" disabled={reorganizing} onClick={reorganizeSchedule}>{reorganizing ? "Processando..." : "Reorganizar"}</button>
+            <button className="btn-secondary" disabled={reorganizing} onClick={rollbackReorganization}>Desfazer ultima</button>
           </div>
         </article>
       </section>}

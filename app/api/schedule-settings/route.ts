@@ -28,39 +28,11 @@ export async function POST(req: NextRequest) {
     const userId = await requireUserId();
     const body = scheduleSettingsSchema.parse(await req.json());
 
-    const settings = await prisma.$transaction(async (tx) => {
-      if (body.resetMode === "FULL") {
-        await tx.task.deleteMany({
-          where: {
-            userId,
-            OR: [
-              { tipo: { in: ["AULA", "REVISAO", "SIMULADO", "LIVRE"] } },
-              { externalId: { startsWith: "aula-" } },
-              { externalId: { startsWith: "review-" } },
-              { externalId: { startsWith: "simulado-sabado-" } }
-            ]
-          }
-        });
-        await tx.lessonQuestion.deleteMany({ where: { userId, lessonId: { startsWith: "aula-" } } });
-      }
-
-      await tx.flashcard.updateMany({
-        where: { userId, dueDate: { gt: new Date() } },
-        data: { dueDate: body.cronogramStartDate }
-      });
-
-      return tx.scheduleSettings.upsert({
-        where: { userId },
-        create: {
-          userId,
-          cronogramStartDate: body.cronogramStartDate,
-          resetMode: body.resetMode
-        },
-        update: {
-          cronogramStartDate: body.cronogramStartDate,
-          resetMode: body.resetMode
-        }
-      });
+    if (body.resetMode === "FULL") return fail(new Error("Reset completo foi desativado para proteger o historico."), 422);
+    const settings = await prisma.scheduleSettings.upsert({
+      where: { userId },
+      create: { userId, cronogramStartDate: body.cronogramStartDate, resetMode: "SMART" },
+      update: { cronogramStartDate: body.cronogramStartDate, resetMode: "SMART" }
     });
 
     return ok(settings, { status: 201 });
